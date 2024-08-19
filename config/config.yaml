@@ -1,0 +1,40 @@
+### Per device confing
+
+# name of the overarching project.  
+# comment out this line to force dashboard to set the project
+project: "project_name"
+
+# # name of the platform  
+# robot_name: "robot_name"
+
+# name of this upload device
+# this should be unique.  
+source: "device_name"
+
+# API key to log into the server
+API_KEY_TOKEN: device_1_key_101201
+
+# How many parallel threads for uploads
+threads: 4
+
+# IP address and ports of all known servers
+# Comment out to use zeroconf to find the server. 
+servers:
+  - "127.0.0.1:8091"
+
+# which directories to watch for files to upload
+watch:
+  - /mnt/data/project
+
+# what kinds of files to search for.  
+include_suffix:
+  - mcap
+  - mp4 
+  - png 
+  - txt
+  - bag 
+  - ass
+  - yaml
+
+# how long to wait before checking again
+wait_s: 5

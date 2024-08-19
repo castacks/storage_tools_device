@@ -1,0 +1,22 @@
+
+services:
+  storage_tools_device:
+    build:
+      context: .
+      args:
+        CUSTOM_UID: ${CUSTOM_UID}
+        CUSTOM_GID: ${CUSTOM_GID}
+        CUSTOM_USERNAME: ${CUSTOM_USERNAME}
+    image: storage_tools_device
+    container_name: storage_tools_device
+    network_mode: host
+    environment:
+      - CUSTOM_UID=${CUSTOM_UID}
+      - CUSTOM_GID=${CUSTOM_GID}
+      - CUSTOM_USERNAME=${CUSTOM_USERNAME}
+    volumes:
+      - ${DATA_DIR}:${DATA_DIR}
+      - ${CONFIG_FILE}:/home/devscanner/app/config/config.yaml
+    tty: true
+    stdin_open: true
+    restart: always

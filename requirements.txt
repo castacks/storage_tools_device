@@ -1,0 +1,17 @@
+# pyjwt
+# hvac
+# xmltodict
+pyyaml
+tqdm
+# requests_toolbelt
+humanfriendly
+websocket-client
+flask-socketio
+mcap-ros2-support
+exifread
+ffmpeg-python
+pytz 
+rosbags
+zeroconf
+
+requests
