@@ -4,12 +4,6 @@ src/explore/*
 *.pyc
 src/node/uploads/*
 
-src/reportProcessor/dev/
-src/reportProcessor/src/reports
-src/server/server.py
-src/reportProcessor/src/scratch_ray.py
-src/server/static/stratch.html
-src/device/devenv/
 
 src/device/device.py
 src/server/server/server.py
