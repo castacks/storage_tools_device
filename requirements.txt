@@ -1,11 +1,8 @@
-# pyjwt
-# hvac
-# xmltodict
 pyyaml
 tqdm
-# requests_toolbelt
 humanfriendly
 websocket-client
+websockets
 flask-socketio
 mcap-ros2-support
 exifread
@@ -13,5 +10,5 @@ ffmpeg-python
 pytz 
 rosbags
 zeroconf
-
 requests
+psutil

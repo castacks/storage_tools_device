@@ -7,9 +7,6 @@ project: "project_name"
 # # name of the platform  
 # robot_name: "robot_name"
 
-# name of this upload device
-# this should be unique.  
-source: "device_name"
 
 # API key to log into the server
 API_KEY_TOKEN: device_1_key_101201

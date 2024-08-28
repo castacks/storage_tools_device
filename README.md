@@ -10,7 +10,6 @@ Clone this repo.
 
 Update `config/config.yaml` to match your environment.  Things you should update:
 
-* `source`.  This must be unique.  
 * `API_KEY_TOKEN`.  The api key that your admin gave you.
 * `watch`.  The list of directories that have your robot's files.
 

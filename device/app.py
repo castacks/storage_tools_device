@@ -2,7 +2,6 @@
 
 from datetime import datetime, timedelta,timezone
 import shutil 
-from requests.models import ChunkedEncodingError, ProtocolError
 import socketio
 from threading import Thread
 import socketio.exceptions
@@ -14,6 +13,7 @@ import socket
 import time
 import yaml
 import hashlib 
+import psutil
 from mcap.reader import make_reader
 import exifread 
 import ffmpeg 
@@ -255,6 +255,18 @@ def compute_md5(file_path, chunk_size=8192, position=None, socket=None, source=N
     return rtn
 
 
+def get_source_by_mac_address():
+    macs = []
+    addresses = psutil.net_if_addrs()
+    for interface in sorted(addresses):
+        if interface == "lo":
+            continue
+        for addr in sorted(addresses[interface]):
+            if addr.family == psutil.AF_LINK:  # Check if it's a MAC address
+                if psutil.net_if_stats()[interface].isup:
+                    macs.append(addr.address.replace(":",""))
+    rtn = "DEV-" + "_".join(macs)
+    return rtn 
 
 
 """
@@ -275,8 +287,20 @@ class Device:
         with open(filename, "r") as f:
             self.m_config = yaml.safe_load(f)
 
+        self.m_config["source"] = get_source_by_mac_address()
+        debug_print(f"Setting source name to {self.m_config['source']}")
+
         self.m_config["servers"] = self.m_config.get("servers", [])
-        self.m_sio = socketio.Client()
+        self.m_sio = socketio.Client(
+            reconnection=True,
+            reconnection_attempts=0,  # Infinite attempts
+            reconnection_delay=1,  # Start with 1 second delay
+            reconnection_delay_max=5,  # Maximum 5 seconds delay
+            randomization_factor=0.5,  # Randomize delays by +/- 50%
+            logger=False,  # Enable logging for debugging
+            engineio_logger=False  # Enable Engine.IO logging
+        )
+
         self.m_server = None 
 
         self.m_signal = None
@@ -328,9 +352,10 @@ class Device:
                     self.m_sio.disconnect()
 
                 api_key_token = self.m_config["API_KEY_TOKEN"]
-                headers={'Authorization': f'Bearer {api_key_token}'}
+                headers = {"X-Api-Key": api_key_token}
 
-                self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers)
+                self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
+                # self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['polling'])
                 self.m_sio.on('control_msg')(self._handle_control_msg)    
                 self.m_sio.on('update_entry')(self._update_entry)
                 self.m_sio.on('set_project')(self._set_project)
@@ -338,14 +363,42 @@ class Device:
                 self.m_sio.on("device_scan")(self.scan)
                 self.m_sio.on("device_send")(self.send)
                 self.m_sio.on("device_remove")(self.removeFiles)
+                self.m_sio.on("keep_alive_ack")(self._keepAlive)
+                self.m_sio.on("disconnect")(self._on_disconnect)
+                # self.m_sio.on("echo")(self._on_echo)
 
                 self.m_sio.emit('join', { 'room': self.m_config["source"], "type": "device" })
                 self.m_server = server_full
                 return server_full
-            except Exception as e:
+            except ConnectionRefusedError as e:
+                debug_print(f"Connection Refused: {e}")
+                pass
+
+            except OSError as e:
+                debug_print(f"OS Error: {e}")
+                pass 
+
+            except socketio.exceptions.ConnectionError as e:
+                debug_print(f"Connection error {e}")
+                pass 
+
+            except ValueError:
+                self.m_sio.disconnect()
+                pass
+
+            except Exception as e:                
                 debug_print(e)
+                # raise e
                 pass 
         return None 
+
+
+    def _on_disconnect(self):        
+        debug_print(f"Got disconnection on {requests}")
+
+    def _keepAlive(self):
+        pass
+        #debug_print("Still alive")
 
     def _handle_control_msg(self, data):
         debug_print(data)
@@ -430,6 +483,9 @@ class Device:
         total_size = 0
         for dirroot in self.m_config["watch"]:
             debug_print("Scanning " + dirroot)
+
+            self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
+
             if os.path.exists(dirroot):
                 dev = os.stat(dirroot).st_dev
                 if not dev in self.m_fs_info:
@@ -438,7 +494,8 @@ class Device:
                     self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
 
             for root, dirs, files in os.walk(dirroot):
-                debug_print(root)
+                # debug_print(root)
+                # self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
                 for file in files:
                     if not self._include(file):
                         continue
@@ -501,6 +558,8 @@ class Device:
                         fullpath, entry = file_queue.get(block=False)
                     except queue.Empty:
                         break 
+                    except ValueError:
+                        break
 
                     if self.m_computeMD5:
                         md5 = compute_md5(fullpath, self.m_chunk_size, 1+position, socket=self.m_sio, source=self.m_config["source"], main_pbar=main_pbar)
@@ -520,8 +579,11 @@ class Device:
                 thread.join()
 
         rtn = []
-        while not rtn_queue.empty():
-            rtn.append(rtn_queue.get())
+        try:
+            while not rtn_queue.empty():
+                rtn.append(rtn_queue.get())
+        except ValueError:
+            pass
 
         try:
             self.m_sio.emit("device_status", {"source": self.m_config["source"]})
@@ -558,79 +620,6 @@ class Device:
 
         self._removeFiles(files)
 
-    def sendFiles(self, server):
-        files = self._scan()
-        # debug_print(files)
-        if len(files) == 0:
-            debug_print("No files to send")
-            return None 
-
-        # clear out signals
-        self.m_signal = None 
-
-        robot_name = self.m_config.get("robot_name", None)
-        project = self.m_config.get("project")
-        source = self.m_config["source"]
-        api_key_token = self.m_config["API_KEY_TOKEN"]
-
-        url = f"http://{server}/device"
-        data = {
-            "robot_name": robot_name, 
-            "project": project, 
-            "source": source,
-            "fs_info": self.m_fs_info,
-            "files": files
-            }
-        headers = {
-            'Content-Type': 'application/json', 
-            "Authorization": f"Bearer {api_key_token}"
-              } 
-        
-        try:
-            response = requests.post(url, json=data, headers=headers, stream=True)
-        except requests.exceptions.ConnectionError:
-            return None 
-        
-        if response.status_code == 401:
-            import sys
-            sys.exit()
-
-
-        holding = ""
-        try:
-            for line in response.iter_lines():
-                if line:
-                    # debug_print(line)
-                    try:
-                        holding += line.decode("utf-8")
-                        data = json.loads(holding)
-                        holding = ""
-                        if not isinstance(data, dict):
-                            continue
-
-                        action = data.get("action", None)
-                        if action == "wait":
-                            debug_print("Waiting")
-                        elif action == "send":
-                            files = data.get("files")
-                            self._sendFiles(server, files)
-                        elif action == "delete":
-                            files = data.get("files")
-                            self._removeFiles(files)
-                            return True 
-                        elif action == "rescan":  
-                            debug_print("Rescan?")                          
-                            return True 
-                    except json.decoder.JSONDecodeError as e:
-                        # debug_print(f"Error: {e}")
-                        continue
-        except ProtocolError as e:
-            pass  
-        except ChunkedEncodingError as e:
-            pass  
-        
-        return False 
-
     ''' @brief send files to server. 
 
         @arg server hosname:port
@@ -645,6 +634,7 @@ class Device:
         source = self.m_config["source"]
         api_key_token = self.m_config["API_KEY_TOKEN"]
 
+        split_size_gb = self.m_config.get("split_size_gb", 1)
 
         total_size = 0
         file_queue = queue.Queue()
@@ -659,14 +649,14 @@ class Device:
                 raise e 
             file_queue.put(file_pair)
 
-        with SocketIOTQDM(total=total_size, desc="File Transfer", position=0, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+        with SocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
 
             def worker(index:int):
                 with requests.Session() as session:
-                    while True:
+                    while self.isConnected():
                         try:
-                            dirroot, file, upload_id, offset, total_size = file_queue.get(block=False)
-                            offset = int(offset)
+                            dirroot, file, upload_id, offset_, total_size = file_queue.get(block=False)
+                            offset_b = int(offset_)
                             total_size = int(total_size)
                         except queue.Empty:
                             break 
@@ -680,43 +670,64 @@ class Device:
                             continue 
 
                         # total_size = os.path.getsize(fullpath)
+                        
 
                         with open(fullpath, 'rb') as file:
+
                             params = {}
-                            if offset > 0:
-                                file.seek(offset)
-                                params["offset"] = offset 
-                                total_size -= offset 
+                            if offset_b > 0:
+                                file.seek(offset_b)
+                                params["offset"] = offset_b 
+                                total_size -= offset_b 
+
+                            split_size_b = 1024*1024*1024*split_size_gb
+                            splits = total_size // split_size_b
+
+                            # debug_print(f"splits: {splits}")
+
+                            params["splits"] = splits
 
                             headers = {
-                                'Content-Type': 'application/octet-stream',
-                                "Authorization": f"Bearer {api_key_token}"
-
+                                'Content-Type': 'application/octet-stream',                                
+                                "X-Api-Key": api_key_token
                                 }
                             
                             # Setup the progress bar
                             with SocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=1+index, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as pbar:
-                                def read_and_update():
-                                    while True:
+                                def read_and_update(offset_b, parent):
+                                    
+                                    read_count = 0
+                                    while parent.isConnected():
                                         # Read the file in chunks of 4096 bytes (or any size you prefer)
                                         chunk = file.read(1024*1024)
                                         # debug_print(f"{len(chunk)}")
                                         if not chunk:
                                             break
                                         yield chunk
+
+                                        chunck_size = len(chunk)
                                         # Update the progress bar
-                                        pbar.update(len(chunk))
-                                        main_pbar.update(len(chunk))
+                                        pbar.update(chunck_size)
+                                        main_pbar.update(chunck_size)
 
                                         if self.m_signal:
                                             if self.m_signal == "cancel":
                                                 break
                                 
-                                # Make the POST request with the streaming data
-                                response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(), headers=headers)
+                                        offset_b += chunck_size
+                                        read_count += chunck_size
 
-                            if response.status_code != 200:
-                                print("Error uploading file:", response.text)
+                                        if read_count >= split_size_b:
+                                            break
+
+                                for cid in range(1+splits):
+                                    params["offset"] = offset_b 
+                                    params["cid"] = cid
+                                    # Make the POST request with the streaming data
+                                    response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
+
+                                if response.status_code != 200:
+                                    print("Error uploading file:", response.text)
 
                             # main_pbar.update()
         
@@ -780,11 +791,20 @@ class Device:
             "project": project, 
             "source": source,
             "fs_info": self.m_fs_info,
-            "files": self.m_files
+            # "files": self.m_files
             }
 
-        debug_print("send")
+        # sz = len(json.dumps(data))
+        # debug_print(f"sending {sz} bytes")
+
         if self.m_sio.connected:
+            if project and len(project) > 1:
+                N = 5
+                packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
+                # debug_print(f"sending {len(packs)}")
+                for pack in packs:                
+                    self.m_sio.emit("device_files_items", {"source": source, "files": pack})
+                time.sleep(0.5)
             self.m_sio.emit("device_files", data)
 
 
@@ -803,34 +823,40 @@ class Device:
                 debug_print("loops")
                 self.emitFiles()
 
+                trigger = 0
                 while self.isConnected():
+                    if trigger > 10:
+                        trigger = 0                        
+                        self.m_sio.emit("keep_alive")
+                    else:
+                        trigger +=1 
                     time.sleep(1)
-
+                debug_print("Got disconnected!")
 
         except KeyboardInterrupt:
             debug_print("Terminated")
             pass          
 
 
-    def runOnce(self):
+    # def runOnce(self):
 
-        try:
-            while True:   
-                debug_print("-----")             
-                server =  self._find_server()
-                if server is None:
-                    debug_print("Sleeping....")
-                    time.sleep(self.m_config["wait_s"])
-                    continue
-                else:
-                    status = self.sendFiles(server)
-                    if status is None:
-                        debug_print("No files on server. Sleeping for one minute")
-                        time.sleep(60)
+    #     try:
+    #         while True:   
+    #             debug_print("-----")             
+    #             server =  self._find_server()
+    #             if server is None:
+    #                 debug_print("Sleeping....")
+    #                 time.sleep(self.m_config["wait_s"])
+    #                 continue
+    #             else:
+    #                 status = self.sendFiles(server)
+    #                 if status is None:
+    #                     debug_print("No files on server. Sleeping for one minute")
+    #                     time.sleep(60)
 
-        except KeyboardInterrupt:
-            debug_print("Terminated")
-            pass                  
+    #     except KeyboardInterrupt:
+    #         debug_print("Terminated")
+    #         pass                  
 
     
 
