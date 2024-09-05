@@ -94,12 +94,19 @@ def _getMetaDataMCAP(filename: str, local_tz:str) -> dict:
         if summary.statistics.message_end_time == 0:
             return None
 
+        # mcap does not have a for free message count.  
+        topics = {}
+        for _, channel, message in reader.iter_messages():
+            topic = channel.topic 
+            topics[topic] = topics.get(topic, 0) +1
+
+
         start_time_ros = summary.statistics.message_start_time
         end_time_ros = summary.statistics.message_end_time
         rtn = {
             "start_time": datetime.fromtimestamp(start_time_ros // 1e9, tz=timezone.utc).astimezone(pytz.timezone(local_tz)).strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": datetime.fromtimestamp(end_time_ros // 1e9, tz=timezone.utc).astimezone(pytz.timezone(local_tz)).strftime("%Y-%m-%d %H:%M:%S"),
-            "topics": [ channel.topic for _, channel in summary.channels.items()]
+            "topics": topics
         }
     return rtn
 
@@ -110,7 +117,7 @@ def _getMetadataROS(filename: str, local_tz:str) -> dict:
 
     start_time_ros = reader.start_time
     end_time_ros = reader.end_time 
-    topics = sorted(reader.topics)
+    topics = {topic: reader.topics[topic].msgcount for topic in sorted(reader.topics)}
 
     rtn = {
         "start_time": datetime.fromtimestamp(start_time_ros // 1e9, tz=timezone.utc).astimezone(pytz.timezone(local_tz)).strftime("%Y-%m-%d %H:%M:%S"),
@@ -352,10 +359,9 @@ class Device:
                     self.m_sio.disconnect()
 
                 api_key_token = self.m_config["API_KEY_TOKEN"]
-                headers = {"X-Api-Key": api_key_token}
+                headers = {"X-Api-Key": api_key_token }
 
                 self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
-                # self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['polling'])
                 self.m_sio.on('control_msg')(self._handle_control_msg)    
                 self.m_sio.on('update_entry')(self._update_entry)
                 self.m_sio.on('set_project')(self._set_project)
@@ -379,7 +385,7 @@ class Device:
                 pass 
 
             except socketio.exceptions.ConnectionError as e:
-                debug_print(f"Connection error {e}")
+                debug_print(f"SocketIO Connection error {e}")
                 pass 
 
             except ValueError:
@@ -493,50 +499,68 @@ class Device:
                     free_percentage = (free / total) * 100
                     self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
 
-            for root, dirs, files in os.walk(dirroot):
-                # debug_print(root)
-                # self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
+            filenames = []
+            for root, _, files in os.walk(dirroot):
                 for file in files:
                     if not self._include(file):
                         continue
                     filename = os.path.join(root, file).replace(dirroot, "")
                     filename = filename.strip("/")
                     fullpath = os.path.join(root, file)
-                    size = os.path.getsize(fullpath)
+                    filenames.append((dirroot, filename, fullpath))
 
-                    metadata = getMetaData(fullpath, self.m_local_tz)
-                    if metadata is None:
-                        # invalid file!
-                        continue 
+        entries, total_size = self._get_metadata(filenames)
 
-                    formatted_date = getDateFromFilename(fullpath)
-                    if formatted_date is None:
-                        creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
-                        formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
-                    start_time = metadata.get("start_time", formatted_date)
-                    end_time = metadata.get("end_time", formatted_date)
+            
 
-                    device_entry = {
-                        "dirroot": dirroot,
-                        "filename": filename,
-                        "size": size,
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        "site": None,
-                        "robot_name": None,
-                        "md5": None
-                    }
-                    device_entry.update(metadata)
 
-                    if filename in self.m_updates:
-                        device_entry.update( self.m_updates[filename])
+            # for root, dirs, files in os.walk(dirroot):
+            #     debug_print(root)
+            #     self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
+            #     for file in files:
+            #         if not self._include(file):
+            #             continue
+            #         filename = os.path.join(root, file).replace(dirroot, "")
+            #         filename = filename.strip("/")
+            #         fullpath = os.path.join(root, file)
+            #         size = os.path.getsize(fullpath)
 
-                    entries.append(device_entry)
+            #         metadata = getMetaData(fullpath, self.m_local_tz)
+            #         if metadata is None:
+            #             # invalid file!
+            #             continue 
 
-                    total_size += size
+            #         formatted_date = getDateFromFilename(fullpath)
+            #         if formatted_date is None:
+            #             creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
+            #             formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
+            #         start_time = metadata.get("start_time", formatted_date)
+            #         end_time = metadata.get("end_time", formatted_date)
 
+            #         device_entry = {
+            #             "dirroot": dirroot,
+            #             "filename": filename,
+            #             "size": size,
+            #             "start_time": start_time,
+            #             "end_time": end_time,
+            #             "site": None,
+            #             "robot_name": None,
+            #             "md5": None
+            #         }
+            #         device_entry.update(metadata)
+
+            #         if filename in self.m_updates:
+            #             device_entry.update( self.m_updates[filename])
+
+            #         entries.append(device_entry)
+
+            #         total_size += size
+
+        rtn = self._do_md5sum(entries, total_size) 
+        return rtn 
+
+    def _do_md5sum(self, entries, total_size):
         with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
-
             file_queue = queue.Queue()
             rtn_queue = queue.Queue()
             for entry in entries:
@@ -590,8 +614,88 @@ class Device:
         except socketio.exceptions.BadNamespaceError:
             pass 
 
-        self.m_files = rtn 
-        return rtn 
+        self.m_files = rtn
+        return rtn
+
+    def _get_metadata(self, filenames):
+        
+        with SocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+            file_queue = queue.Queue()            
+            entries_queue = queue.Queue()
+
+            for item in filenames:
+                file_queue.put(item)
+
+            def worker(position:int):
+                while True:
+                    try:
+                        dirroot, filename, fullpath = file_queue.get(block=False)
+                    except queue.Empty:
+                        break 
+                    except ValueError:
+                        break
+
+                    metadata_filename = fullpath + ".metadata"
+                    if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
+                        device_entry = json.load(open(metadata_filename, "r"))
+
+                    else:
+                        size = os.path.getsize(fullpath)
+
+                        metadata = getMetaData(fullpath, self.m_local_tz)
+                        if metadata is None:
+                            # invalid file!
+                            continue 
+
+                        formatted_date = getDateFromFilename(fullpath)
+                        if formatted_date is None:
+                            creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
+                            formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
+                        start_time = metadata.get("start_time", formatted_date)
+                        end_time = metadata.get("end_time", formatted_date)
+
+                        device_entry = {
+                            "dirroot": dirroot,
+                            "filename": filename,
+                            "size": size,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "site": None,
+                            "robot_name": None,
+                            "md5": None
+                        }
+                        device_entry.update(metadata)
+
+                    if filename in self.m_updates:
+                        device_entry.update( self.m_updates[filename])
+
+                    entries_queue.put(device_entry)
+
+                    with open(metadata_filename, "w") as fid:
+                        json.dump(device_entry, fid, indent=True)
+
+                    main_pbar.update()
+
+            threads = []
+            num_threads = min(self.m_config["threads"], len(filenames))
+            for i in range(num_threads):
+                thread = Thread(target=worker, args=(i,))
+                thread.start()
+                threads.append(thread)
+
+            for thread in threads:
+                thread.join()
+
+        entries = []
+        total_size = 0
+        try:
+            while not entries_queue.empty():
+                entry = entries_queue.get()
+                entries.append(entry)
+                total_size += entry["size"]
+        except ValueError:
+            pass
+        return entries,total_size
 
     def scan(self, data):
         source = data.get("source")

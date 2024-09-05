@@ -116,13 +116,18 @@ class SocketIOTQDM(tqdm):
         else:
             rate = 0
 
+        if self.unit == "B":
+            hrate = humanfriendly.format_size(rate) + "/S"
+        else:
+            hrate = humanfriendly.format_number(rate) + " it/S"
+
         msg = {
             "source": self.source,
             "desc": self.desc,
             "progress": self.n,
             "total": self.total,
             "position": self.position,
-            "rate": humanfriendly.format_size(rate) + "/S",
+            "rate": hrate,
             "remaining": remaining
         }
 
