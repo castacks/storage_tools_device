@@ -1,43 +1,44 @@
 #!/usr/bin/env python
 
 from datetime import datetime, timedelta,timezone
-import shutil 
-import socketio
-from threading import Thread
-import socketio.exceptions
-import json 
-import os
-import queue 
-import requests
-import socket
-import time
-import yaml
-import hashlib 
-import psutil
 from mcap.reader import make_reader
+from rosbags.highlevel import AnyReader
+from threading import Thread
+from typing import cast
+from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 import exifread 
 import ffmpeg 
-import re
-import pytz 
+import hashlib 
+import json 
+import os
 import pathlib
-from rosbags.highlevel import AnyReader
-from typing import cast
-from zeroconf import (
-    ServiceBrowser,
-    ServiceStateChange,
-    Zeroconf,
-)
-
-
-
+import psutil
+import pytz 
+import queue 
+import re
+import requests
+import shutil 
+import socket
+import socketio
+import socketio.exceptions
+import time
+import yaml
 
 from debug_print import debug_print
 from SocketIOTQDM import SocketIOTQDM
 
 
-## inspection
 def getDateFromFilename(full_filename:str):
+    """
+    Extracts a date and time from a given filename using various patterns.
 
+    Args:
+        full_filename (str): The full path or name of the file.
+
+    Returns:
+        str: A formatted date-time string in the form 'YYYY-MM-DD HH:MM:SS' if a matching pattern is found, 
+             or None if no date can be extracted.
+    """
 
     # YYYY-MM-DD_HH.MM.SS
     pattern1 = r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})\.(\d{2})\.(\d{2})\..*$"
@@ -89,7 +90,11 @@ def _getMetaDataMCAP(filename: str, local_tz:str) -> dict:
     with open(filename, "rb") as f:
         reader = make_reader(f)
 
-        summary = reader.get_summary()
+        try:
+            summary = reader.get_summary()
+        except Exception as e:
+            debug_print(f"Failed to read {filename} because {e}")
+            return None
 
         if summary.statistics.message_end_time == 0:
             return None
@@ -322,6 +327,13 @@ class Device:
 
         self.m_local_tz = self.m_config.get("local_tz", "America/New_York")
 
+        # test to make sure time zone is set correctly. 
+        try:
+            pytz.timezone(self.m_local_tz)
+        except pytz.UnknownTimeZoneError:
+            debug_print(f"Invalid config option 'local_tz'. The string '{self.m_local_tz}' is not a valid time zone ")
+            sys.exit(1)
+
         services = ['_http._tcp.local.']
         self.m_zeroconfig = Zeroconf()
         self.m_zero_conf_name = "Airlab_storage._http._tcp.local."
@@ -362,16 +374,15 @@ class Device:
                 headers = {"X-Api-Key": api_key_token }
 
                 self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
-                self.m_sio.on('control_msg')(self._handle_control_msg)    
-                self.m_sio.on('update_entry')(self._update_entry)
-                self.m_sio.on('set_project')(self._set_project)
-                self.m_sio.on('set_md5')(self._set_md5)
-                self.m_sio.on("device_scan")(self.scan)
-                self.m_sio.on("device_send")(self.send)
-                self.m_sio.on("device_remove")(self.removeFiles)
-                self.m_sio.on("keep_alive_ack")(self._keepAlive)
+                self.m_sio.on('control_msg')(self._on_control_msg)    
+                self.m_sio.on('update_entry')(self._on_update_entry)
+                self.m_sio.on('set_project')(self._on_set_project)
+                self.m_sio.on('set_md5')(self._on_set_md5)
+                self.m_sio.on("device_scan")(self._on_device_scan)
+                self.m_sio.on("device_send")(self._on_device_send)
+                self.m_sio.on("device_remove")(self.on_device_remove)
+                self.m_sio.on("keep_alive_ack")(self._on_keep_alive_ack)
                 self.m_sio.on("disconnect")(self._on_disconnect)
-                # self.m_sio.on("echo")(self._on_echo)
 
                 self.m_sio.emit('join', { 'room': self.m_config["source"], "type": "device" })
                 self.m_server = server_full
@@ -402,16 +413,15 @@ class Device:
     def _on_disconnect(self):        
         debug_print(f"Got disconnection on {requests}")
 
-    def _keepAlive(self):
+    def _on_keep_alive_ack(self):
         pass
-        #debug_print("Still alive")
 
-    def _handle_control_msg(self, data):
+    def _on_control_msg(self, data):
         debug_print(data)
         if data.get("action", "") == "cancel":
             self.m_signal = "cancel"
 
-    def _update_entry(self, data):
+    def _on_update_entry(self, data):
         source = data.get("source")
         if source != self.m_config["source"]:
             return 
@@ -425,7 +435,7 @@ class Device:
         self.m_updates[filename].update( update )
 
 
-    def _set_project(self, data):
+    def _on_set_project(self, data):
         debug_print(data)
         source = data.get("source")
         if source != self.m_config["source"]:
@@ -436,7 +446,7 @@ class Device:
 
         self.emitFiles()
 
-    def _set_md5(self, data):
+    def _on_set_md5(self, data):
         debug_print(data)
         source = data.get("source")
         if source != self.m_config["source"]:
@@ -510,53 +520,10 @@ class Device:
                     filenames.append((dirroot, filename, fullpath))
 
         entries, total_size = self._get_metadata(filenames)
-
             
-
-
-            # for root, dirs, files in os.walk(dirroot):
-            #     debug_print(root)
-            #     self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
-            #     for file in files:
-            #         if not self._include(file):
-            #             continue
-            #         filename = os.path.join(root, file).replace(dirroot, "")
-            #         filename = filename.strip("/")
-            #         fullpath = os.path.join(root, file)
-            #         size = os.path.getsize(fullpath)
-
-            #         metadata = getMetaData(fullpath, self.m_local_tz)
-            #         if metadata is None:
-            #             # invalid file!
-            #             continue 
-
-            #         formatted_date = getDateFromFilename(fullpath)
-            #         if formatted_date is None:
-            #             creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
-            #             formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
-            #         start_time = metadata.get("start_time", formatted_date)
-            #         end_time = metadata.get("end_time", formatted_date)
-
-            #         device_entry = {
-            #             "dirroot": dirroot,
-            #             "filename": filename,
-            #             "size": size,
-            #             "start_time": start_time,
-            #             "end_time": end_time,
-            #             "site": None,
-            #             "robot_name": None,
-            #             "md5": None
-            #         }
-            #         device_entry.update(metadata)
-
-            #         if filename in self.m_updates:
-            #             device_entry.update( self.m_updates[filename])
-
-            #         entries.append(device_entry)
-
-            #         total_size += size
-
         rtn = self._do_md5sum(entries, total_size) 
+
+        debug_print("scan complete")
         return rtn 
 
     def _do_md5sum(self, entries, total_size):
@@ -622,6 +589,8 @@ class Device:
         with SocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
             file_queue = queue.Queue()            
             entries_queue = queue.Queue()
+            
+            robot_name = self.m_config.get("robot_name", None)
 
             for item in filenames:
                 file_queue.put(item)
@@ -645,6 +614,7 @@ class Device:
                         metadata = getMetaData(fullpath, self.m_local_tz)
                         if metadata is None:
                             # invalid file!
+                            # silently ignore invalid files! 
                             continue 
 
                         formatted_date = getDateFromFilename(fullpath)
@@ -661,7 +631,7 @@ class Device:
                             "start_time": start_time,
                             "end_time": end_time,
                             "site": None,
-                            "robot_name": None,
+                            "robot_name": robot_name,
                             "md5": None
                         }
                         device_entry.update(metadata)
@@ -697,7 +667,7 @@ class Device:
             pass
         return entries,total_size
 
-    def scan(self, data):
+    def _on_device_scan(self, data):
         source = data.get("source")
         if source != self.m_config["source"]:
             return 
@@ -706,7 +676,7 @@ class Device:
         self.emitFiles()
 
 
-    def send(self, data):
+    def _on_device_send(self, data):
         source = data.get("source")
         if source != self.m_config["source"]:
             return 
@@ -715,7 +685,7 @@ class Device:
         self._sendFiles(self.m_server, files)
 
 
-    def removeFiles(self, data):
+    def on_device_remove(self, data):
         # debug_print(data)
         source = data.get("source")
         if source != self.m_config["source"]:
@@ -724,12 +694,15 @@ class Device:
 
         self._removeFiles(files)
 
-    ''' @brief send files to server. 
+    def _sendFiles(self, server:str, filelist:list):
+        ''' Send files to server. 
 
-        @arg server hosname:port
-        @arg filelist list[(dirroot, relpath, upload_id, offset, size)]
-    '''    
-    def _sendFiles(self, server, filelist):
+            Creates up to config["threads"] workers to send files via HTTP POST to the server. 
+
+            Args:
+                server hosname:port
+                filelist list[(dirroot, relpath, upload_id, offset, size)]
+        '''    
         self.m_signal = None 
 
         num_threads = min(self.m_config["threads"], len(filelist))
@@ -753,8 +726,14 @@ class Device:
                 raise e 
             file_queue.put(file_pair)
 
+        # Outer send loop progress bar. 
         with SocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
 
+            # Worker thread. 
+            # Reads the file_queue until 
+            #    queue is empty 
+            #    the session is disconnected
+            #    the "cancel" signal is received. 
             def worker(index:int):
                 with requests.Session() as session:
                     while self.isConnected():
@@ -773,11 +752,7 @@ class Device:
                             main_pbar.update()
                             continue 
 
-                        # total_size = os.path.getsize(fullpath)
-                        
-
                         with open(fullpath, 'rb') as file:
-
                             params = {}
                             if offset_b > 0:
                                 file.seek(offset_b)
@@ -786,8 +761,6 @@ class Device:
 
                             split_size_b = 1024*1024*1024*split_size_gb
                             splits = total_size // split_size_b
-
-                            # debug_print(f"splits: {splits}")
 
                             params["splits"] = splits
 
@@ -802,15 +775,13 @@ class Device:
                                     
                                     read_count = 0
                                     while parent.isConnected():
-                                        # Read the file in chunks of 4096 bytes (or any size you prefer)
                                         chunk = file.read(1024*1024)
-                                        # debug_print(f"{len(chunk)}")
                                         if not chunk:
                                             break
                                         yield chunk
 
+                                        # Update the progress bars
                                         chunck_size = len(chunk)
-                                        # Update the progress bar
                                         pbar.update(chunck_size)
                                         main_pbar.update(chunck_size)
 
@@ -832,23 +803,22 @@ class Device:
 
                                 if response.status_code != 200:
                                     print("Error uploading file:", response.text)
-
-                            # main_pbar.update()
         
-
+            # start the threads with thread id
             threads = []
             for i in range(num_threads):
                 thread = Thread(target=worker, args=(i,))
                 thread.start()
                 threads.append(thread)
 
+            # wait for all the threads to complete
             for thread in threads:
                 thread.join()
 
         self.m_signal = None 
 
 
-    def _removeFiles(self, files):
+    def _removeFiles(self, files:list):
 
         debug_print("Enter")
         for item in files:
@@ -857,6 +827,7 @@ class Device:
             
             if os.path.exists(fullpath):
                 debug_print(f"Removing {fullpath}")
+                # os.remove(fullpath)
                 # only rename for testing. 
                 bak = fullpath + ".bak"
                 if os.path.exists(bak): 
@@ -866,16 +837,32 @@ class Device:
             md5 = fullpath + ".md5"
             if os.path.exists(md5):
                 debug_print(f"Removing {md5}")
+                # os.remove(md5)
                 # only rename for testing. 
                 bak = md5 + ".bak"
                 if os.path.exists(bak): 
                     continue
                 os.rename(md5, bak)
 
+            metadata = fullpath + ".metadata"
+            if os.path.exists(metadata):
+                debug_print(f"Removing {metadata}")
+                # os.remove(metadata)
+                bak = metadata + ".bak"
+                if os.path.exists(bak): 
+                    continue
+                os.rename(md5, bak)
+
+
         self._scan()
         self.emitFiles()
 
     def emitFiles(self):
+        '''
+        Send the list of files to the server. 
+        
+        Breaks up the list into bite sized chunks. 
+        '''
         if self.m_files is None:
             self._scan()
         # debug_print(files)
@@ -895,17 +882,13 @@ class Device:
             "project": project, 
             "source": source,
             "fs_info": self.m_fs_info,
-            # "files": self.m_files
             }
 
-        # sz = len(json.dumps(data))
-        # debug_print(f"sending {sz} bytes")
 
         if self.m_sio.connected:
             if project and len(project) > 1:
-                N = 5
+                N = 20
                 packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
-                # debug_print(f"sending {len(packs)}")
                 for pack in packs:                
                     self.m_sio.emit("device_files_items", {"source": source, "files": pack})
                 time.sleep(0.5)
@@ -940,27 +923,6 @@ class Device:
         except KeyboardInterrupt:
             debug_print("Terminated")
             pass          
-
-
-    # def runOnce(self):
-
-    #     try:
-    #         while True:   
-    #             debug_print("-----")             
-    #             server =  self._find_server()
-    #             if server is None:
-    #                 debug_print("Sleeping....")
-    #                 time.sleep(self.m_config["wait_s"])
-    #                 continue
-    #             else:
-    #                 status = self.sendFiles(server)
-    #                 if status is None:
-    #                     debug_print("No files on server. Sleeping for one minute")
-    #                     time.sleep(60)
-
-    #     except KeyboardInterrupt:
-    #         debug_print("Terminated")
-    #         pass                  
 
     
 

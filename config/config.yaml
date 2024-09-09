@@ -1,29 +1,46 @@
 ### Per device confing
 
-# name of the overarching project.  
-# comment out this line to force dashboard to set the project
-project: "project_name"
 
-# # name of the platform  
-# robot_name: "robot_name"
+###############################################################################
+#                   Change to localize for your project 
+###############################################################################
 
+# Name of the overarching project.  
+# Uncomment this line to always assoicate this device with a specific project. 
+# project: "my_project_name"
+
+# name of the platform  
+robot_name: "my_robot_name"
 
 # API key to log into the server
 API_KEY_TOKEN: device_1_key_101201
-
-# How many parallel threads for uploads
-threads: 4
-
-# IP address and ports of all known servers
-# Comment out to use zeroconf to find the server. 
-servers:
-  - "127.0.0.1:8091"
 
 # which directories to watch for files to upload
 watch:
   - /mnt/data/project
 
-# what kinds of files to search for.  
+
+# Timezone used when converting UTC to local time
+local_tz: "America/New_York"
+
+# IP address and ports of all known servers
+# The Device will by default use ZeroConf to find the nearest server.
+# The Device will check these hosts for if ZeroConf fails to find a server. 
+
+# servers:
+#   - "127.0.0.1:8091"
+
+
+###############################################################################
+# Operational configurations
+###############################################################################
+
+
+# How many parallel threads for uploads
+threads: 4
+
+# What kinds of files to search for.  
+# Comment out types to avoid.  
 include_suffix:
   - mcap
   - mp4 
@@ -33,5 +50,5 @@ include_suffix:
   - ass
   - yaml
 
-# how long to wait before checking again
+# How many seconds to wait before checking servers again
 wait_s: 5
