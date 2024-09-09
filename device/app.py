@@ -263,7 +263,13 @@ def compute_md5(file_path, chunk_size=8192, position=None, socket=None, source=N
         return None  # Handle file not found if needed
     
     rtn = md5.hexdigest()
-    json.dump(rtn, open(cache_name, "w"))
+    try:
+        json.dump(rtn, open(cache_name, "w"))
+    except PermissionError as e:
+        debug_print(f"Failed to write [{cache_name}]. Permission Denied")
+    except Exception as e:
+        debug_print(f"Error writing [{cache_name}]: {e}")
+    
     return rtn
 
 
@@ -641,8 +647,13 @@ class Device:
 
                     entries_queue.put(device_entry)
 
-                    with open(metadata_filename, "w") as fid:
-                        json.dump(device_entry, fid, indent=True)
+                    try:
+                        with open(metadata_filename, "w") as fid:
+                            json.dump(device_entry, fid, indent=True)
+                    except PermissionError as e:
+                        debug_print(f"Failed to write [{metadata_filename}]. Permission Denied")
+                    except Exception as e:
+                        debug_print(f"Error writing [{metadata_filename}]: {e}")
 
                     main_pbar.update()
 

@@ -48,3 +48,7 @@ Verify that the Device has a route to the Server, via `ping`, `ssh`, or `telnet`
 Verify that the Server is running.  
 
 Verify that the Device and the Server are on the same network.  Some routers can filter out the UPnP messages used by ZeroConfig.
+
+### Device is always rescanning files, even when nothing has changed
+
+Verify that the [artifacts](Artifacts.md) files are being created. The Device user might not have write permission in the data directory.
