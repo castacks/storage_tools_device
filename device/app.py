@@ -830,6 +830,9 @@ class Device:
             for thread in threads:
                 thread.join()
 
+        if self.m_signal == "cancel":
+            self.emitFiles()
+
         self.m_signal = None 
 
 
@@ -842,31 +845,31 @@ class Device:
             
             if os.path.exists(fullpath):
                 debug_print(f"Removing {fullpath}")
-                # os.remove(fullpath)
+                os.remove(fullpath)
                 # only rename for testing. 
-                bak = fullpath + ".bak"
-                if os.path.exists(bak): 
-                    continue
-                os.rename(fullpath, bak)
+                # bak = fullpath + ".bak"
+                # if os.path.exists(bak): 
+                #     continue
+                # os.rename(fullpath, bak)
 
             md5 = fullpath + ".md5"
             if os.path.exists(md5):
                 debug_print(f"Removing {md5}")
-                # os.remove(md5)
+                os.remove(md5)
                 # only rename for testing. 
-                bak = md5 + ".bak"
-                if os.path.exists(bak): 
-                    continue
-                os.rename(md5, bak)
+                # bak = md5 + ".bak"
+                # if os.path.exists(bak): 
+                #     continue
+                # os.rename(md5, bak)
 
             metadata = fullpath + ".metadata"
             if os.path.exists(metadata):
                 debug_print(f"Removing {metadata}")
-                # os.remove(metadata)
-                bak = metadata + ".bak"
-                if os.path.exists(bak): 
-                    continue
-                os.rename(md5, bak)
+                os.remove(metadata)
+                # bak = metadata + ".bak"
+                # if os.path.exists(bak): 
+                #     continue
+                # os.rename(md5, bak)
 
 
         self._scan()
