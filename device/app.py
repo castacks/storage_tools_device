@@ -283,7 +283,11 @@ def get_source_by_mac_address():
             if addr.family == psutil.AF_LINK:  # Check if it's a MAC address
                 if psutil.net_if_stats()[interface].isup:
                     macs.append(addr.address.replace(":",""))
-    rtn = "DEV-" + "_".join(macs)
+
+    name = hashlib.sha256("_".join(macs).encode()).hexdigest()[:16]
+    rtn = f"DEV-{name}"
+
+    # rtn = "DEV-" + "_".join(macs)
     return rtn 
 
 
@@ -417,7 +421,7 @@ class Device:
 
 
     def _on_disconnect(self):        
-        debug_print(f"Got disconnection on {requests}")
+        debug_print(f"Got disconnected")
 
     def _on_keep_alive_ack(self):
         pass
