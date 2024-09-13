@@ -12,3 +12,4 @@ rosbags
 zeroconf
 requests
 psutil
+eventlet

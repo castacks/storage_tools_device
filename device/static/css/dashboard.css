@@ -1,0 +1,96 @@
+.container {
+    max-width: 800px;
+} 
+
+/* .connection_status_online {
+    padding: 0.5em;
+    color: white;
+    background-color: green;
+    flex-grow: 0;
+} */
+
+.connection_status_online {
+    padding: 5px 10px;
+    color: black;
+    background-color: white;
+    /* 'Online' status */
+    text-align: center;
+    border-radius: 5px;
+    /* Rounded corners for aesthetics */
+    border: none;
+    /* No border for a flat appearance */
+    cursor: default;
+    /* Default cursor to indicate non-interactivity */
+    box-shadow: none;
+    /* No shadow to flatten the appearance */
+}
+
+
+.connection_status_offline {
+    padding: 5px 10px;
+    color: red;
+    background-color: white;
+    /* 'Online' status */
+    text-align: center;
+    border-radius: 5px;
+    /* Rounded corners for aesthetics */
+    border: none;
+    /* No border for a flat appearance */
+    cursor: default;
+    /* Default cursor to indicate non-interactivity */
+    box-shadow: none;
+    /* No shadow to flatten the appearance */
+}
+
+/* .connection_status_offline {
+    padding: 0.5em;
+    color: white;
+    background-color: red;
+    flex-grow: 0;
+} */
+
+/* .connection_status_unknown {
+    padding: 0.5em;
+    color: white;
+    background-color: orange;
+    flex-grow: 0;
+} */
+
+.connection_status_unknown {
+    padding: 5px 10px;
+    color: white;
+    background-color: orange;
+    /* 'Online' status */
+    text-align: center;
+    border-radius: 5px;
+    /* Rounded corners for aesthetics */
+    border: none;
+    /* No border for a flat appearance */
+    cursor: default;
+    /* Default cursor to indicate non-interactivity */
+    box-shadow: none;
+    /* No shadow to flatten the appearance */
+}
+
+
+.input-group {
+    margin-bottom: 10px;
+}
+
+
+body {
+    font-family: Arial, sans-serif;
+}
+
+.sidebar {
+    height: 100vh;
+    background-color: #f0f0f0;
+    padding: 20px;
+    border-right: 1px solid #ddd;
+}
+
+.main-content {
+    padding: 20px;
+    height: 100vh;
+    overflow-y: auto;
+}

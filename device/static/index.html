@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Configuration</title>
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/css/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/css/dashboard.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar -->
+            <div class="col-md-2 sidebar">
+                <ul class="nav nav-pills flex-column">
+                    <li class="navbar-brand"><b>AirLAB Device</b><br>
+                     <div id="device_connection_status" class="connection_status_online">Device: Online </div>
+                     <div id="server_connection_status" class="connection_status_offline">Server: Disconnected </div>
+                    </li>
+                    <hr>
+                    <li class="nav-item">
+                        <a class="nav-link active" data-bs-toggle="tab" href="#config-tab"><i class="bi bi-gear"></i>
+                            &nbsp; Config</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" data-bs-toggle="tab" href="#connection-tab"><i class="bi bi-cloud"></i>
+                            &nbsp; Connection</a>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Main content -->
+            <div class="col-md-10 main-content">
+                <div class="tab-content">
+                    <div id="connection-tab" class="tab-pane fade">
+                        <h2>Connection Status</h2>
+
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="row">
+                                    <label for="connection_server_name">Connected Server</label>
+                                    <input id="connection_server_name" type="text" value="None" readonly="true">
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <div id="config-tab" class="tab-pane fade show active">
+                        <h2>Device Configuration</h2>
+                        <div class="card">
+                            <div class="card-body">
+                                <!-- Configuration Form -->
+                                <form id="config-form">
+                                    <table class="table table-borderless align-middle">
+                                        <tbody>
+                                            <tr>
+                                                <td class="text-end"><label for="project_name"
+                                                        class="form-label">Project Name</label></td>
+                                                <td><input type="text" class="form-control" id="project_name"
+                                                        placeholder="Enter project name"></td>
+                                            </tr>
+                                            <tr>
+                                                <td class="text-end"><label for="robot_name"
+                                                        class="form-label">Robot Name</label></td>
+                                                <td><input type="text" class="form-control" id="robot_name"
+                                                        placeholder="Enter robot name"></td>
+                                            </tr>
+                                            <tr>
+                                                <td class="text-end"><label for="API_KEY_TOKEN"
+                                                        class="form-label">API Key Token</label></td>
+                                                <td><input type="text" class="form-control" id="API_KEY_TOKEN"
+                                                        placeholder="Enter API key" required></td>
+                                            </tr>
+                                            <!-- Watch List -->
+                                            <tr>
+                                                <td class="text-end align-top"><label
+                                                        class="form-label">Watch</label></td>
+                                                <td>
+                                                    <div id="watch-list"></div>
+                                                    <div class="input-group mb-3">
+                                                        <input type="text" id="new-watch-item" class="form-control"
+                                                            placeholder="Add new watch directory">
+                                                        <button type="button" class="btn btn-success"
+                                                            onclick="addListItem('watch')">Add</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            <!-- Servers List -->
+                                            <tr>
+                                                <td class="text-end align-top"><label
+                                                        class="form-label">Servers</label></td>
+                                                <td>
+                                                    <div id="servers-list"></div>
+                                                    <div class="input-group mb-3">
+                                                        <input type="text" id="new-server-item" class="form-control"
+                                                            placeholder="Add new server">
+                                                        <button type="button" class="btn btn-success"
+                                                            onclick="addListItem('servers')">Add</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td class="text-end"><label for="local_tz"
+                                                        class="form-label">Local Time Zone</label></td>
+                                                <td><input type="text" class="form-control" id="local_tz"
+                                                        placeholder="Enter local time zone" required></td>
+                                            </tr>
+                                            <tr>
+                                                <td class="text-end"><label for="threads"
+                                                        class="form-label">Threads</label></td>
+                                                <td><input type="number" class="form-control" id="threads" min="1"
+                                                        max="8" value="4" required></td>
+                                            </tr>
+                                            <!-- Include Suffix List -->
+                                            <tr>
+                                                <td class="text-end align-top"><label class="form-label">Include
+                                                        Suffix</label></td>
+                                                <td>
+                                                    <div id="include_suffix-list"></div>
+                                                    <div class="input-group mb-3">
+                                                        <input type="text" id="new-suffix-item" class="form-control"
+                                                            placeholder="Add new suffix">
+                                                        <button type="button" class="btn btn-success"
+                                                            onclick="addListItem('include_suffix')">Add</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td class="text-end"><label for="wait_s"
+                                                        class="form-label">Watch Interval
+                                                        (seconds)</label></td>
+                                                <td><input type="number" class="form-control" id="wait_s" min="2"
+                                                        placeholder="Enter watch interval in seconds" required></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+
+                                    <!-- Buttons -->
+                                    <div class="d-flex justify-content-end">
+                                        <button type="button" class="btn btn-primary me-2"
+                                            onclick="saveConfig()">Save</button>
+                                        <button type="button" class="btn btn-secondary"
+                                            onclick="refreshConfig()">Refresh</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/jquery-3.6.0.min.js"></script>
+    <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/dashboard.js"></script>
+</body>
+
+</html>
