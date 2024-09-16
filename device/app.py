@@ -3,6 +3,7 @@
 import threading
 from flask import Flask, request 
 from flask_socketio import SocketIO
+import os 
 
 from Device import Device
 
@@ -40,6 +41,11 @@ if __name__ == "__main__":
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)
 
+    port = os.environ.get("CONFIG_PORT", "8811")
+    if len(port) == 0:
+        port = 8811
+    else:
+        port = int(port)
 
-    sockethost.run(app=app, host="0.0.0.0", port=8811)
+    sockethost.run(app=app, host="0.0.0.0", port=port)
     # device.run()

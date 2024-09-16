@@ -1,13 +1,8 @@
 .container {
     max-width: 800px;
-} 
+    overflow-x: scroll;
 
-/* .connection_status_online {
-    padding: 0.5em;
-    color: white;
-    background-color: green;
-    flex-grow: 0;
-} */
+} 
 
 .connection_status_online {
     padding: 5px 10px;
@@ -42,19 +37,6 @@
     /* No shadow to flatten the appearance */
 }
 
-/* .connection_status_offline {
-    padding: 0.5em;
-    color: white;
-    background-color: red;
-    flex-grow: 0;
-} */
-
-/* .connection_status_unknown {
-    padding: 0.5em;
-    color: white;
-    background-color: orange;
-    flex-grow: 0;
-} */
 
 .connection_status_unknown {
     padding: 5px 10px;
@@ -83,16 +65,22 @@ body {
 }
 
 .sidebar {
-    height: 100vh;
-    background-color: #f0f0f0;
-    padding: 20px;
-    border-right: 1px solid #ddd;
+    flex: 0 0 200px; /* Fixed width for the sidebar */
+    max-width: 200px; /* Maximum width for the sidebar */
+    min-width: 150px; /* Minimum width for the sidebar */
+    background-color: #f0f0f0; /* Optional: background color for visibility */
+    height: 100vh; /* Full height */
+    overflow-y: auto; /* Allow vertical scrolling for sidebar */
 }
 
 .main-content {
     padding: 20px;
     height: 100vh;
     overflow-y: auto;
+    overflow-x: auto;
+
+    flex: 1; /* Take up the remaining space */
+
 }
 
 

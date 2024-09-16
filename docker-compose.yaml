@@ -7,6 +7,7 @@ services:
         CUSTOM_UID: ${CUSTOM_UID}
         CUSTOM_GID: ${CUSTOM_GID}
         CUSTOM_USERNAME: ${CUSTOM_USERNAME}
+        CONFIG_PORT: ${CONFIG_PORT}
     image: storage_tools_device
     container_name: storage_tools_device
     network_mode: host
@@ -14,6 +15,7 @@ services:
       - CUSTOM_UID=${CUSTOM_UID}
       - CUSTOM_GID=${CUSTOM_GID}
       - CUSTOM_USERNAME=${CUSTOM_USERNAME}
+      - CONFIG_PORT=${CONFIG_PORT}
     volumes:
       - ${DATA_DIR}:${DATA_DIR}
       - ${CONFIG_FILE}:/home/devscanner/app/config/config.yaml
