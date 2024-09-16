@@ -94,3 +94,18 @@ body {
     height: 100vh;
     overflow-y: auto;
 }
+
+
+.question-circle {
+    display: inline-flex; /* Aligns the text in the middle */
+    align-items: center; /* Center vertically */
+    justify-content: center; /* Center horizontally */
+    width: 24px; /* Circle width */
+    height: 24px; /* Circle height */
+    background-color: green; /* Circle background color */
+    border-radius: 50%; /* Makes the element a circle */
+    color: white; /* Text color for the question mark */
+    font-weight: bold; /* Bold text */
+    cursor: pointer; /* Pointer cursor on hover */
+    text-align: center; /* Center the question mark */
+}

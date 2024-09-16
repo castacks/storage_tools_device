@@ -17,8 +17,8 @@
             <div class="col-md-2 sidebar">
                 <ul class="nav nav-pills flex-column">
                     <li class="navbar-brand"><b>AirLAB Device</b><br>
-                     <div id="device_connection_status" class="connection_status_online">Device: Online </div>
-                     <div id="server_connection_status" class="connection_status_offline">Server: Disconnected </div>
+                        <div id="device_connection_status" class="connection_status_online">Device: Online </div>
+                        <div id="server_connection_status" class="connection_status_offline">Server: Disconnected </div>
                     </li>
                     <hr>
                     <li class="nav-item">
@@ -41,9 +41,12 @@
                         <div class="card">
                             <div class="card-body">
                                 <div class="row">
-                                    <label for="connection_server_name">Connected Server</label>
+                                    <label for="connection_server_name">Connected Server</label>                                    
                                     <input id="connection_server_name" type="text" value="None" readonly="true">
-                                    <button id="btn_disconnect" type="button" class="btn btn-danger" onclick="disconnect()">Disconnect</button>
+                                    <span data-bs-toggle="tooltip" title="Disconnect from the current server and start the connection process again.">
+                                    <button id="btn_disconnect" type="button" class="btn btn-danger"
+                                        onclick="disconnect()">Disconnect</button>
+                                    </span>
                                 </div>
                             </div>
 
@@ -60,26 +63,37 @@
                                         <tbody>
                                             <tr>
                                                 <td class="text-end"><label for="project_name"
-                                                        class="form-label">Project Name</label></td>
+                                                        class="form-label">Project Name</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="Name of the project. If this is empty, the server will ask you to fill in the name.">?</span>
+                                                </td>
                                                 <td><input type="text" class="form-control" id="project_name"
                                                         placeholder="Enter project name"></td>
                                             </tr>
                                             <tr>
-                                                <td class="text-end"><label for="robot_name"
-                                                        class="form-label">Robot Name</label></td>
+                                                <td class="text-end"><label for="robot_name" class="form-label">Robot
+                                                        Name</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="Name of this robot. This should be unique within the project.">?</span>
+                                                </td>
                                                 <td><input type="text" class="form-control" id="robot_name"
                                                         placeholder="Enter robot name"></td>
                                             </tr>
                                             <tr>
-                                                <td class="text-end"><label for="API_KEY_TOKEN"
-                                                        class="form-label">API Key Token</label></td>
+                                                <td class="text-end"><label for="API_KEY_TOKEN" class="form-label">API
+                                                        Key Token</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="The API_KEY_TOKEN for this robot. Your admin can provide this to you. If you are running your own upload server, it is set in the Config->Keys page.">?</span>
+                                                </td>
                                                 <td><input type="text" class="form-control" id="API_KEY_TOKEN"
                                                         placeholder="Enter API key" required></td>
                                             </tr>
                                             <!-- Watch List -->
                                             <tr>
-                                                <td class="text-end align-top"><label
-                                                        class="form-label">Watch</label></td>
+                                                <td class="text-end align-top"><label class="form-label">Watch</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="The list of directories to be watched.  Any file with a matching suffix (see Include Suffix) will be uploaded.">?</span>
+                                                </td>
                                                 <td>
                                                     <div id="watch-list"></div>
                                                     <div class="input-group mb-3">
@@ -92,8 +106,10 @@
                                             </tr>
                                             <!-- Servers List -->
                                             <tr>
-                                                <td class="text-end align-top"><label
-                                                        class="form-label">Servers</label></td>
+                                                <td class="text-end align-top"><label class="form-label">Servers</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="List of potential servers.  If this is empty, the Device will search for servers using ZeroConf.">?</span>
+                                                </td>
                                                 <td>
                                                     <div id="servers-list"></div>
                                                     <div class="input-group mb-3">
@@ -105,21 +121,30 @@
                                                 </td>
                                             </tr>
                                             <tr>
-                                                <td class="text-end"><label for="local_tz"
-                                                        class="form-label">Local Time Zone</label></td>
+                                                <td class="text-end"><label for="local_tz" class="form-label">Local Time
+                                                        Zone</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="The time zone that the logs were recorded in.">?</span>
+                                                </td>
                                                 <td><input type="text" class="form-control" id="local_tz"
                                                         placeholder="Enter local time zone" required></td>
                                             </tr>
                                             <tr>
                                                 <td class="text-end"><label for="threads"
-                                                        class="form-label">Threads</label></td>
+                                                        class="form-label">Threads</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="The number of threads used for uploading from this device to the server">?</span>
+                                                </td>
                                                 <td><input type="number" class="form-control" id="threads" min="1"
                                                         max="8" value="4" required></td>
                                             </tr>
                                             <!-- Include Suffix List -->
                                             <tr>
                                                 <td class="text-end align-top"><label class="form-label">Include
-                                                        Suffix</label></td>
+                                                        Suffix</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="The list of included suffixes.  Any file in the Watch directory (see above) that matches one of these suffixes will be uploaded to the server.">?</span>
+                                                </td>
                                                 <td>
                                                     <div id="include_suffix-list"></div>
                                                     <div class="input-group mb-3">
@@ -131,9 +156,12 @@
                                                 </td>
                                             </tr>
                                             <tr>
-                                                <td class="text-end"><label for="wait_s"
-                                                        class="form-label">Watch Interval
-                                                        (seconds)</label></td>
+                                                <td class="text-end"><label for="wait_s" class="form-label">Watch
+                                                        Interval
+                                                        (seconds)</label>
+                                                    <span class="question-circle" data-bs-toggle="tooltip"
+                                                        title="How long to wait in seconds before attempting to connect to server again.">?</span>
+                                                </td>
                                                 <td><input type="number" class="form-control" id="wait_s" min="2"
                                                         placeholder="Enter watch interval in seconds" required></td>
                                             </tr>
