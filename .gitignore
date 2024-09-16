@@ -15,3 +15,10 @@ src/server/Dockerfile.deploy
 *.orig
 
 .vscode/settings.json
+config/config.test.yaml
+config/config.ssdtemp.yaml
+config/config.ssd.yaml
+config/config.small.yaml
+config/config.dsta.yaml
+config/config.chiron.yaml
+config/config.zeroconf.yaml
