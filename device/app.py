@@ -35,6 +35,7 @@ if __name__ == "__main__":
     app.route("/")(device.index)
     app.route("/get_config", methods=["GET"])(device.get_config)
     app.route("/save_config", methods=["POST"])(device.save_config)
+    app.route("/disconnect", methods=["GET"])(device.do_disconnect)
 
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)

@@ -24,7 +24,7 @@ function removeListItem(element) {
 // Function to save configuration
 function saveConfig() {
     const config = {
-        project_name: document.getElementById("project_name").value,
+        project: document.getElementById("project_name").value,
         robot_name: document.getElementById("robot_name").value,
         API_KEY_TOKEN: document.getElementById("API_KEY_TOKEN").value,
         watch: getListItems('watch'),
@@ -62,7 +62,7 @@ function refreshConfig() {
     fetch("/get_config")
         .then(response => response.json())
         .then(config => {
-            document.getElementById("project_name").value = config.project_name || "";
+            document.getElementById("project_name").value = config.project || "";
             document.getElementById("robot_name").value = config.robot_name || "";
             document.getElementById("API_KEY_TOKEN").value = config.API_KEY_TOKEN || "";
             document.getElementById("local_tz").value = config.local_tz || "";
@@ -89,6 +89,11 @@ function addListItemToField(field, value) {
         <button class="btn btn-danger" onclick="removeListItem(this)">&#128465;</button>
     `;
     listElement.appendChild(itemElement);
+}
+
+
+function disconnect() {
+    fetch("/disconnect")
 }
 
 // Refresh config on page load

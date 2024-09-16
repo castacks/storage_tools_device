@@ -39,9 +39,12 @@ class Device:
         ## and echo console messages.  
         self.m_local_dashboard_sio = local_dashboard_sio
 
+        self.m_config_filename = filename 
+
         self.m_config = None
         with open(filename, "r") as f:
             self.m_config = yaml.safe_load(f)
+            debug_print(json.dumps(self.m_config, indent=True))
 
         self.m_config["source"] = get_source_by_mac_address()
         debug_print(f"Setting source name to {self.m_config['source']}")
@@ -650,13 +653,17 @@ class Device:
 
         robot_name = self.m_config.get("robot_name", None)
         project = self.m_config.get("project")
+        if project is not None and len(project) < 1:
+            project = None 
         source = self.m_config["source"]
 
+        debug_print(f"project name is: {project}")
         data = {
             "robot_name": robot_name,
             "project": project,
             "source": source,
             "fs_info": self.m_fs_info,
+            "total": len(self.m_files)
             }
 
 
@@ -670,8 +677,15 @@ class Device:
             self.m_sio.emit("device_files", data)
 
 
+
     def isConnected(self):
         return self.m_sio.connected
+
+
+    def do_disconnect(self):
+        debug_print("Got disconnect message from ui")
+        self.m_sio.disconnect()
+        return "Ok", 200
 
     def index(self):
         return send_from_directory("static", "index.html")
@@ -680,12 +694,23 @@ class Device:
         return jsonify(self.m_config)
 
     def save_config(self):
+        prior_project = self.m_config["project"]
+
         config = request.json
         for key in config:
             if key in self.m_config:
                 self.m_config[key] = config[key]
+
         debug_print("updated config")
-        # todo: save config file.  
+
+        with open(self.m_config_filename, "w") as f:
+            yaml.dump(config, f)
+
+        # emit the files if the project name has changed!
+        if self.m_config["project"] != prior_project:
+            self.emitFiles()
+
+        return "Saved", 200
 
     def run(self):
         try:
