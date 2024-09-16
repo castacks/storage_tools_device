@@ -13,7 +13,7 @@
 robot_name: "my_robot_name"
 
 # API key to log into the server
-API_KEY_TOKEN: device_1_key_101201
+API_KEY_TOKEN: cbea87b419c09982
 
 # which directories to watch for files to upload
 watch:
