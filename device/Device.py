@@ -263,14 +263,23 @@ class Device:
 
     def _scan(self):
         debug_print("Scanning for files")
-        self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": "Scanning for files"})
+        try:
+            if self.m_sio.connected:
+                self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": "Scanning for files"})
+        except socketio.exceptions.BadNamespaceError:
+            pass 
+
         self.m_fs_info = {}
         entries = []
         total_size = 0
         for dirroot in self.m_config["watch"]:
             debug_print("Scanning " + dirroot)
 
-            self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
+            try:
+                if self.m_sio.connected:
+                    self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
+            except socketio.exceptions.BadNamespaceError:
+                pass 
 
             if os.path.exists(dirroot):
                 dev = os.stat(dirroot).st_dev
@@ -298,12 +307,12 @@ class Device:
 
     def _do_md5sum(self, entries, total_size):
 
-        event = "device_status_tqdm"
+        # event = "device_status_tqdm"
         # socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
-        socket_events = [ (self.m_sio, event, None)]
+        # socket_events = [ (self.m_sio, event, None)]
 
-        # with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
-        with MultiTargetSocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+        with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+        # with MultiTargetSocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
             file_queue = queue.Queue()
             rtn_queue = queue.Queue()
             for entry in entries:

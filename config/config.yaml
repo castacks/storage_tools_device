@@ -27,8 +27,8 @@ local_tz: "America/New_York"
 # The Device will by default use ZeroConf to find the nearest server.
 # The Device will check these hosts for if ZeroConf fails to find a server. 
 
-# servers:
-#   - "127.0.0.1:8091"
+servers:
+  -  "airlab-storage.andrew.cmu.edu:8091"
 
 
 ###############################################################################
