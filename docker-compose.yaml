@@ -3,22 +3,20 @@ services:
   storage_tools_device:
     build:
       context: .
+      dockerfile: Dockerfile
       args:
-        CUSTOM_UID: ${CUSTOM_UID}
-        CUSTOM_GID: ${CUSTOM_GID}
-        CUSTOM_USERNAME: ${CUSTOM_USERNAME}
         CONFIG_PORT: ${CONFIG_PORT}
     image: storage_tools_device
     container_name: storage_tools_device
     network_mode: host
+    env_file:
+      - config.env
     environment:
-      - CUSTOM_UID=${CUSTOM_UID}
-      - CUSTOM_GID=${CUSTOM_GID}
-      - CUSTOM_USERNAME=${CUSTOM_USERNAME}
       - CONFIG_PORT=${CONFIG_PORT}
+      - DATA_DIR=${DATA_DIR}
     volumes:
       - ${DATA_DIR}:${DATA_DIR}
-      - ${CONFIG_FILE}:/home/devscanner/app/config/config.yaml
+      - ./config:/app/config
     tty: true
     stdin_open: true
     restart: always

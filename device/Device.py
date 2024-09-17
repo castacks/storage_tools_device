@@ -1,4 +1,4 @@
-from SocketIOTQDM import SocketIOTQDM
+from SocketIOTQDM import SocketIOTQDM, MultiTargetSocketIOTQDM
 from debug_print import debug_print
 from flask import request 
 
@@ -297,7 +297,13 @@ class Device:
         return rtn
 
     def _do_md5sum(self, entries, total_size):
-        with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+
+        event = "device_status_tqdm"
+        # socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
+        socket_events = [ (self.m_sio, event, None)]
+
+        # with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+        with MultiTargetSocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
             file_queue = queue.Queue()
             rtn_queue = queue.Queue()
             for entry in entries:
@@ -356,7 +362,12 @@ class Device:
 
     def _get_metadata(self, filenames):
 
+        event = "device_status_tqdm"
+        # socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
+        socket_events = [ (self.m_sio, event, None)]
+
         with SocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+        # with MultiTargetSocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
             file_queue = queue.Queue()
             entries_queue = queue.Queue()
 
@@ -414,6 +425,8 @@ class Device:
                     try:
                         with open(metadata_filename, "w") as fid:
                             json.dump(device_entry, fid, indent=True)
+                        os.chmod(metadata_filename, 0o777)
+                        
                     except PermissionError as e:
                         debug_print(f"Failed to write [{metadata_filename}]. Permission Denied")
                     except Exception as e:
@@ -694,20 +707,32 @@ class Device:
         return jsonify(self.m_config)
 
     def save_config(self):
-        prior_project = self.m_config["project"]
-
+        changed = False
+        rescan = False
+ 
         config = request.json
         for key in config:
             if key in self.m_config:
+                if self.m_config[key] != config[key]:
+                    changed = True
+                    if key == "watch":
+                        rescan = True
+
                 self.m_config[key] = config[key]
+                
 
         debug_print("updated config")
 
         with open(self.m_config_filename, "w") as f:
             yaml.dump(config, f)
 
+        os.chmod(self.m_config_filename, 0o777 )
+
+        if rescan:
+            self._scan()
+
         # emit the files if the project name has changed!
-        if self.m_config["project"] != prior_project:
+        if changed:
             self.emitFiles()
 
         return "Saved", 200
@@ -739,3 +764,26 @@ class Device:
             pass
 
         sys.exit(0)
+
+    def debug_socket(self):
+        debug_print("start\n\nstart")
+        thread = Thread(target=self._debug_socket)
+        thread.start()
+        debug_print("complete\n\ncomplete")
+        return "ok", 200
+
+    def _debug_socket(self):
+
+        event = "device_status_tqdm"
+        socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
+
+        # with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+        total_size = 15
+        with MultiTargetSocketIOTQDM(total=total_size, desc="Debug socket", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+            for i in range(total_size):
+                main_pbar.update()
+                self.m_local_dashboard_sio.emit("ping", "msg")
+                time.sleep(1)
+
+
+        pass 

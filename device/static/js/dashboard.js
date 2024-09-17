@@ -149,4 +149,20 @@ $(document).ready(function () {
 
     });
 
+    socket.on('device_status_tqdm', function (msg) {
+        console.log(msg)
+        updateProgress(msg, 'device-status-tqdm');
+      });
+
+    socket.on("ping", function(msg) {
+        console.log(msg);
+    })
+    
 });
+
+
+function debugSocket() {
+    fetch("debug")
+}
+
+window.allProgressBars = {};

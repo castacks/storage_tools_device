@@ -46,6 +46,8 @@ def compute_md5(file_path, chunk_size=8192, position=None, socket=None, source=N
     rtn = md5.hexdigest()
     try:
         json.dump(rtn, open(cache_name, "w"))
+        os.chmod(cache_name, 0o777 )
+        
     except PermissionError as e:
         debug_print(f"Failed to write [{cache_name}]. Permission Denied")
     except Exception as e:
