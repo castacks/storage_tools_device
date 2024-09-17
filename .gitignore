@@ -22,3 +22,5 @@ config/config.small.yaml
 config/config.dsta.yaml
 config/config.chiron.yaml
 config/config.zeroconf.yaml
+Dockerfile.new
+docker-compose-new.yaml

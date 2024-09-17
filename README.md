@@ -18,12 +18,11 @@ When you need to get your files from here to the server. The Storage Tools Devic
   cd stroage_tools_device
   ```
 
-* Update the `env.sh` to match your system.
+* Update the `config.env` to match your system.
 
   * Required
     * `DATA_DIR`. This is the top level data directory that all of the `watch` dirs share.  For example, if you `watch` directories are `/mnt/data/processor_1` and `/mnt/data/processor_2`, set the `DATA_DIR` to `/mnt/data`.  
   * Optional
-    * `CONFIG_FILE`. If you have multiple config files, make sure `CONFIG_FILE` points to the one you want to use. By default the Device will use `${PWD}/config/config.yaml`.
     * `CONFIG_PORT`. The HTTP port to edit the configuration.  Navigate to http://YOUR_DEVICE_IP:CONFIG_PORT to edit the configurations and view online status. The default port is  8811.
 
 ## Build and run
@@ -89,3 +88,4 @@ The Storage Tools Device creates additional files to speed up processing.  These
 ## Troubleshooting
 
 [Troubleshooting](docs/Troubleshooting.md)
+[Known Bugs](docs/KnownBugs.md)
