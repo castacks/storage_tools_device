@@ -1,4 +1,6 @@
 import re
+import mcap
+import mcap.exceptions
 from mcap.reader import make_reader
 from datetime import datetime, timezone
 
@@ -47,7 +49,7 @@ def compute_md5(file_path, chunk_size=8192, position=None, socket=None, source=N
     try:
         json.dump(rtn, open(cache_name, "w"))
         os.chmod(cache_name, 0o777 )
-        
+
     except PermissionError as e:
         debug_print(f"Failed to write [{cache_name}]. Permission Denied")
     except Exception as e:
@@ -135,7 +137,11 @@ def getDateFromFilename(full_filename:str):
 
 def _getMetaDataMCAP(filename: str, local_tz:str) -> dict:
     with open(filename, "rb") as f:
-        reader = make_reader(f)
+
+        try:
+            reader = make_reader(f)
+        except mcap.exceptions.EndOfFile:
+            return None 
 
         try:
             summary = reader.get_summary()
