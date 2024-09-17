@@ -48,7 +48,7 @@ Navigate to http://YOUR_DEVICE_IP:CONFIG_PORT to edit the configurations and vie
 
 **Device**: Is the dashboard connected to the device?  Online means yes. Offline means no.  If you see "Offline", check your network to see if the Device is connected.
 
-**Server**: Is the device connected to a server?  Online means yes. Go to the Connection tab to see which server is connected.  Offline or Unknown means the Device is trying to connect to a server and has not completed the handshake. 
+**Server**: Is the device connected to a server?  Online means yes. Go to the Connection tab to see which server is connected.  Offline or Unknown means the Device is trying to connect to a server and has not completed the handshake.
 
 ### Device Configuration
 
