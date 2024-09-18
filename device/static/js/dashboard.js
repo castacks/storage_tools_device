@@ -111,6 +111,7 @@ $(document).ready(function () {
 
 
     socket.on("connect", function(){
+        console.log("Connected to device")
         let deviceStatusDiv = document.getElementById('device_connection_status');
         deviceStatusDiv.className = "connection_status_online";
         deviceStatusDiv.textContent = "Device: Online"

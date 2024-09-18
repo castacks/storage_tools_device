@@ -9,8 +9,6 @@ services:
     image: storage_tools_device
     container_name: storage_tools_device
     network_mode: host
-    env_file:
-      - config.env
     environment:
       - CONFIG_PORT=${CONFIG_PORT}
       - DATA_DIR=${DATA_DIR}

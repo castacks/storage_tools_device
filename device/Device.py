@@ -1,3 +1,4 @@
+import asyncio
 from SocketIOTQDM import SocketIOTQDM, MultiTargetSocketIOTQDM
 from debug_print import debug_print
 from flask import request 
@@ -11,6 +12,8 @@ import yaml
 from flask import jsonify, send_from_directory
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 from flask_socketio import SocketIO
+from eventlet import tpool
+import eventlet 
 
 import json
 import os
@@ -86,6 +89,19 @@ class Device:
         self.m_zero_conf_name = "Airlab_storage._http._tcp.local."
         self.browser = ServiceBrowser(self.m_zeroconfig, services, handlers=[self.on_change])
 
+    def _create_client(self):
+        sio = socketio.Client(
+            reconnection=True,
+            reconnection_attempts=0,  # Infinite attempts
+            reconnection_delay=1,  # Start with 1 second delay
+            reconnection_delay_max=5,  # Maximum 5 seconds delay
+            randomization_factor=0.5,  # Randomize delays by +/- 50%
+            logger=False,  # Enable logging for debugging
+            engineio_logger=False  # Enable Engine.IO logging
+        )
+        return sio 
+
+
     def on_local_dashboard_connect(self):
         debug_print("Dashboard connected")
         if self.m_sio.connected:
@@ -101,7 +117,8 @@ class Device:
             return
 
         if state_change is ServiceStateChange.Added:
-            info = zeroconf.get_service_info(service_type, name)
+            # info = zeroconf.get_service_info(service_type, name)
+            info = tpool.execute(zeroconf.get_service_info, service_type, name)
 
             if info:
                 addresses = [
@@ -695,7 +712,7 @@ class Device:
                 packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
                 for pack in packs:
                     self.m_sio.emit("device_files_items", {"source": source, "files": pack})
-                time.sleep(0.5)
+                eventlet.sleep(0.5)
             self.m_sio.emit("device_files", data)
 
 
@@ -752,7 +769,8 @@ class Device:
                 server =  self._find_server()
                 if server is None:
                     debug_print("Sleeping....")
-                    time.sleep(self.m_config["wait_s"])
+                    eventlet.sleep(self.m_config["wait_s"])
+                    debug_print("slept")
                     continue
 
                 debug_print("loops")
@@ -765,7 +783,7 @@ class Device:
                         self.m_sio.emit("keep_alive")
                     else:
                         trigger +=1
-                    time.sleep(1)
+                    eventlet.sleep(1)
                 debug_print("Got disconnected!")
 
         except KeyboardInterrupt:
@@ -792,7 +810,7 @@ class Device:
             for i in range(total_size):
                 main_pbar.update()
                 self.m_local_dashboard_sio.emit("ping", "msg")
-                time.sleep(1)
+                eventlet.sleep(1)
 
 
         pass 

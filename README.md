@@ -31,8 +31,12 @@ This sets up the environment and configures the image to start on boot.
 
 ``` bash
 cd /opt/storage_tools_device
-. env.sh
-docker compose up --build
+
+# run in foreground 
+docker compose --env-file config.env up --build --remove-orphans
+
+# run in background
+docker compose --env-file config.env up --build --remove-orphans -d
 ```
 
 ## Configure the Device
