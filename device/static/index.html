@@ -38,8 +38,8 @@
                     <div id="connection-tab" class="tab-pane fade">
                         <h2>Connection Status</h2>
 
-                        <div class="card">
-                            <div class="card-body">
+                        <div class="card device-bg">
+                            <!-- <div class="card-body  device-bg">
                                 <div class="row">
                                     <label for="connection_server_name">Connected Server</label>                                    
                                     <input id="connection_server_name" type="text" value="None" readonly="true">
@@ -49,20 +49,25 @@
                                     </span>
                                 </div>
                             </div>
+ -->
+                            <div class="card-body device-bg">
+                                <div id="connection_list"></div>
+                            </div>
 
                             <p>Status</p>
+                            <div id="device-status-tqdm-header">Progress</div>
                             <div class="card" id="device-status-tqdm"></div>
-                            <button type="button" class="btn btn-danger" onclick="debugSocket()">Debug</button> 
+                            <!-- <button type="button" class="btn btn-danger" onclick="debugSocket()">Debug</button>  -->
                         </div>
                     </div>
 
-                    <div id="config-tab" class="tab-pane fade show active">
+                    <div id="config-tab" class="tab-pane fade show active  device-bg">
                         <h2>Device Configuration</h2>
-                        <div class="card">
-                            <div class="card-body">
+                        <div class="card  device-bg">
+                            <div class="card-body  device-bg">
                                 <!-- Configuration Form -->
-                                <form id="config-form">
-                                    <table class="table table-borderless align-middle">
+                                <form id="config-form"  device-bg>
+                                    <table class="table table-borderless align-middle " data-bs-table-bg="#d0eed0" style="--bs-table-bg: #d0eed0;">
                                         <tbody>
                                             <tr>
                                                 <td class="text-end"><label for="project_name"

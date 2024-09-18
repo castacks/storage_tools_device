@@ -78,6 +78,7 @@ body {
     height: 100vh;
     overflow-y: auto;
     overflow-x: auto;
+    background-color:#d0eed0;
 
     flex: 1; /* Take up the remaining space */
 
@@ -96,4 +97,43 @@ body {
     font-weight: bold; /* Bold text */
     cursor: pointer; /* Pointer cursor on hover */
     text-align: center; /* Center the question mark */
+}
+
+.device-bg {
+    background-color: #d0eed0;
+}
+
+
+
+.connection_list_online {
+    padding: 5px 10px;
+    color: black;
+    background-color: white;
+    /* 'Online' status */
+    text-align: center;
+    border-radius: 5px;
+    /* Rounded corners for aesthetics */
+    border: 1px;
+    /* No border for a flat appearance */
+    cursor: default;
+    /* Default cursor to indicate non-interactivity */
+    box-shadow: none;
+    /* No shadow to flatten the appearance */
+}
+
+
+.connection_list_offline {
+    padding: 5px 10px;
+    color: white;
+    background-color: red;
+    /* 'Online' status */
+    text-align: center;
+    border-radius: 5px;
+    /* Rounded corners for aesthetics */
+    border: 1px;
+    /* No border for a flat appearance */
+    cursor: default;
+    /* Default cursor to indicate non-interactivity */
+    box-shadow: none;
+    /* No shadow to flatten the appearance */
 }

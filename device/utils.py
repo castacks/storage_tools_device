@@ -12,7 +12,7 @@ import pytz
 from datetime import datetime, timedelta,timezone
 
 
-from SocketIOTQDM import SocketIOTQDM
+from SocketIOTQDM import MultiTargetSocketIOTQDM
 from debug_print import debug_print
 
 import psutil
@@ -21,7 +21,7 @@ import json
 import os
 
 
-def compute_md5(file_path, chunk_size=8192, position=None, socket=None, source=None, main_pbar=None):
+def compute_md5(file_path, chunk_size=8192, position=None, socket_events=None, source=None, main_pbar=None):
     md5 = hashlib.md5()
     try:
         pbar = None
@@ -35,7 +35,8 @@ def compute_md5(file_path, chunk_size=8192, position=None, socket=None, source=N
         with open(file_path, 'rb') as f:
             if position:
                 size = os.path.getsize(file_path)
-                pbar = SocketIOTQDM(total=size, unit="B", unit_scale=True, leave=False, position=position, delay=1, desc=os.path.basename(file_path), source=source, socket=socket,event="device_status_tqdm" )
+                pbar = MultiTargetSocketIOTQDM(total=size, unit="B", unit_scale=True, leave=False, position=position, delay=1, desc=os.path.basename(file_path), source=source,socket_events=socket_events)
+
             while chunk := f.read(chunk_size):
                 md5.update(chunk)
                 if pbar: pbar.update(len(chunk))

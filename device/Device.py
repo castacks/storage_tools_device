@@ -14,6 +14,7 @@ from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 from flask_socketio import SocketIO
 from eventlet import tpool
 import eventlet 
+from eventlet.lock import Semaphore as Lock
 
 import json
 import os
@@ -21,13 +22,14 @@ import queue
 import shutil
 import socket
 import sys
-import time
 from datetime import datetime
 from threading import Thread
 from typing import cast
 
 from utils import get_source_by_mac_address, getDateFromFilename, getMetaData
 from utils import compute_md5
+
+
 
 
 class Device:
@@ -53,19 +55,10 @@ class Device:
         debug_print(f"Setting source name to {self.m_config['source']}")
 
         self.m_config["servers"] = self.m_config.get("servers", [])
-        self.m_sio = socketio.Client(
-            reconnection=True,
-            reconnection_attempts=0,  # Infinite attempts
-            reconnection_delay=1,  # Start with 1 second delay
-            reconnection_delay_max=5,  # Maximum 5 seconds delay
-            randomization_factor=0.5,  # Randomize delays by +/- 50%
-            logger=False,  # Enable logging for debugging
-            engineio_logger=False  # Enable Engine.IO logging
-        )
 
         self.m_server = None
 
-        self.m_signal = None
+        self.m_signal = {}
         self.m_fs_info = {}
 
         self.m_files = None
@@ -89,6 +82,13 @@ class Device:
         self.m_zero_conf_name = "Airlab_storage._http._tcp.local."
         self.browser = ServiceBrowser(self.m_zeroconfig, services, handlers=[self.on_change])
 
+
+        self.session_lock = Lock()
+        self.server_threads = {}  # Stores threads for each server
+        self.server_can_run = {}  # Stores the "can run" flag for each server
+        self.server_sessions = {}  # Stores session ID for each server
+        self.server_sio = {} # maps server to socket. 
+
     def _create_client(self):
         sio = socketio.Client(
             reconnection=True,
@@ -104,9 +104,12 @@ class Device:
 
     def on_local_dashboard_connect(self):
         debug_print("Dashboard connected")
-        if self.m_sio.connected:
-            self.m_local_dashboard_sio.emit("server_connect",  {"name": self.m_server})
-        pass  
+
+        self.update_connections()
+        # for server_name, sio in self.server_sio.items():
+        #     connected = sio and sio.connected
+        #     self.m_local_dashboard_sio.emit("server_connect", {"name": server_name, "connected": connected})
+
 
     def on_local_dashboard_disconnect(self):
         debug_print("Dashboard disconnected")
@@ -130,69 +133,16 @@ class Device:
                 if address in self.m_config["servers"]:
                     continue
                 self.m_config["zero_conf"] =self.m_config.get("zero_conf", [])
+                if address in self.m_config["zero_conf"]:
+                    continue
                 self.m_config["zero_conf"].append(address)
+                debug_print(f"added {address}")
 
-    def _find_server(self):
-        servers = []
-        servers.extend(self.m_config["servers"])
-        servers.extend(self.m_config.get("zero_conf", []))
+            # pick the first server
+            if len(self.m_config.get("zero_conf", [])) > 0:
+                server = self.m_config["zero_conf"][0]
+                self.start_server_thread(server)
 
-        for server_full in servers:
-            try:
-                self.m_server = None
-                server, port = server_full.split(":")
-                port = int(port)
-                debug_print(f"Testing {server}:{port}")
-                socket.create_connection((server, port))
-                debug_print(f"Connected to {server}:{port}")
-
-
-                if self.m_sio.connected:
-                    debug_print("Clearing prior socket")
-                    self.m_sio.disconnect()
-
-
-                api_key_token = self.m_config["API_KEY_TOKEN"]
-                headers = {"X-Api-Key": api_key_token }
-
-                self.m_sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
-                self.m_sio.on('control_msg')(self._on_control_msg)
-                self.m_sio.on('update_entry')(self._on_update_entry)
-                self.m_sio.on('set_project')(self._on_set_project)
-                self.m_sio.on('set_md5')(self._on_set_md5)
-                self.m_sio.on("device_scan")(self._on_device_scan)
-                self.m_sio.on("device_send")(self._on_device_send)
-                self.m_sio.on("device_remove")(self.on_device_remove)
-                self.m_sio.on("keep_alive_ack")(self._on_keep_alive_ack)
-                self.m_sio.on("disconnect")(self._on_disconnect)
-
-                self.m_sio.emit('join', { 'room': self.m_config["source"], "type": "device" })
-                self.m_server = server_full
-                
-                self.m_local_dashboard_sio.emit("server_connect",  {"name": server_full})
-
-                return server_full
-            except ConnectionRefusedError as e:
-                debug_print(f"Connection Refused: {e}")
-                pass
-
-            except OSError as e:
-                debug_print(f"OS Error: {e}")
-                pass
-
-            except socketio.exceptions.ConnectionError as e:
-                debug_print(f"SocketIO Connection error {e}")
-                pass
-
-            except ValueError:
-                self.m_sio.disconnect()
-                pass
-
-            except Exception as e:
-                debug_print(e)
-                # raise e
-                pass
-        return None
 
 
     def _on_disconnect(self):
@@ -203,10 +153,10 @@ class Device:
     def _on_keep_alive_ack(self):
         pass
 
-    def _on_control_msg(self, data):
+    def _on_control_msg(self, data, server_address):
         debug_print(data)
         if data.get("action", "") == "cancel":
-            self.m_signal = "cancel"
+            self.m_signal[server_address] = "cancel"
 
     def _on_update_entry(self, data):
         source = data.get("source")
@@ -278,13 +228,14 @@ class Device:
                 return rtn.strip("/")
         return filename
 
+    def _emit_to_all_servers(self, event, msg):
+        for sio in self.server_sio.values():
+            if sio and sio.connected:
+                sio.emit(event, msg)
+
     def _scan(self):
         debug_print("Scanning for files")
-        try:
-            if self.m_sio.connected:
-                self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": "Scanning for files"})
-        except socketio.exceptions.BadNamespaceError:
-            pass 
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files"})
 
         self.m_fs_info = {}
         entries = []
@@ -292,11 +243,7 @@ class Device:
         for dirroot in self.m_config["watch"]:
             debug_print("Scanning " + dirroot)
 
-            try:
-                if self.m_sio.connected:
-                    self.m_sio.emit("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
-            except socketio.exceptions.BadNamespaceError:
-                pass 
+            self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
 
             if os.path.exists(dirroot):
                 dev = os.stat(dirroot).st_dev
@@ -324,12 +271,13 @@ class Device:
 
     def _do_md5sum(self, entries, total_size):
 
-        # event = "device_status_tqdm"
-        # socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
-        # socket_events = [ (self.m_sio, event, None)]
+        event = "device_status_tqdm"
+        socket_events = [(self.m_local_dashboard_sio, event, None)]
+        for sio in self.server_sio.values():
+            if sio and sio.connected:
+                socket_events.append((sio, event, None))
 
-        with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
-        # with MultiTargetSocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+        with MultiTargetSocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
             file_queue = queue.Queue()
             rtn_queue = queue.Queue()
             for entry in entries:
@@ -355,21 +303,18 @@ class Device:
                         break
 
                     if self.m_computeMD5:
-                        md5 = compute_md5(fullpath, self.m_chunk_size, 1+position, socket=self.m_sio, source=self.m_config["source"], main_pbar=main_pbar)
+                        md5 = compute_md5(fullpath, self.m_chunk_size, 1+position, socket_events, source=self.m_config["source"], main_pbar=main_pbar)
                     else:
                         md5 = "0"
                     entry["md5"] = md5
                     rtn_queue.put(entry)
 
-            threads = []
             num_threads = min(self.m_config["threads"], len(entries))
-            for i in range(num_threads):
-                thread = Thread(target=worker, args=(i,))
-                thread.start()
-                threads.append(thread)
+            pool = eventlet.GreenPool(num_threads)
 
-            for thread in threads:
-                thread.join()
+            for i in range(num_threads):
+                pool.spawn(worker, i)
+            pool.waitall()
 
         rtn = []
         try:
@@ -378,10 +323,7 @@ class Device:
         except ValueError:
             pass
 
-        try:
-            self.m_sio.emit("device_status", {"source": self.m_config["source"]})
-        except socketio.exceptions.BadNamespaceError:
-            pass
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"]})
 
         self.m_files = rtn
         return rtn
@@ -389,11 +331,14 @@ class Device:
     def _get_metadata(self, filenames):
 
         event = "device_status_tqdm"
-        # socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
-        socket_events = [ (self.m_sio, event, None)]
 
-        with SocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
-        # with MultiTargetSocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+        socket_events = [(self.m_local_dashboard_sio, event, None)]
+        for sio in self.server_sio.values():
+            if sio and sio.connected:
+                socket_events.append((sio, event, None))
+
+
+        with MultiTargetSocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
             file_queue = queue.Queue()
             entries_queue = queue.Queue()
 
@@ -460,15 +405,13 @@ class Device:
 
                     main_pbar.update()
 
-            threads = []
-            num_threads = min(self.m_config["threads"], len(filenames))
-            for i in range(num_threads):
-                thread = Thread(target=worker, args=(i,))
-                thread.start()
-                threads.append(thread)
 
-            for thread in threads:
-                thread.join()
+            num_threads = min(self.m_config["threads"], len(filenames))
+            pool = eventlet.GreenPool(num_threads)
+
+            for i in range(num_threads):
+                pool.spawn(worker, i)
+            pool.waitall()
 
         entries = []
         total_size = 0
@@ -490,13 +433,13 @@ class Device:
         self.emitFiles()
 
 
-    def _on_device_send(self, data):
+    def _on_device_send(self, data, server):
         source = data.get("source")
         if source != self.m_config["source"]:
             return
         files = data.get("files")
 
-        self._sendFiles(self.m_server, files)
+        self._sendFiles(server, files)
 
 
     def on_device_remove(self, data):
@@ -508,6 +451,10 @@ class Device:
 
         self._removeFiles(files)
 
+    def isConnected(self, server):
+        connected = server in self.server_sio and self.server_sio[server].connected        
+        return connected
+
     def _sendFiles(self, server:str, filelist:list):
         ''' Send files to server. 
 
@@ -517,7 +464,7 @@ class Device:
                 server hosname:port
                 filelist list[(dirroot, relpath, upload_id, offset, size)]
         '''
-        self.m_signal = None
+        self.m_signal[server] = None
 
         num_threads = min(self.m_config["threads"], len(filelist))
         url = f"http://{server}/file"
@@ -541,7 +488,12 @@ class Device:
             file_queue.put(file_pair)
 
         # Outer send loop progress bar. 
-        with SocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
+
+        event = "device_status_tqdm"
+        socket_events = [(self.m_local_dashboard_sio, event, None), (self.server_sio[server], event, None)]
+
+        with MultiTargetSocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+        # with SocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
 
             # Worker thread. 
             # Reads the file_queue until 
@@ -550,7 +502,8 @@ class Device:
             #    the "cancel" signal is received. 
             def worker(index:int):
                 with requests.Session() as session:
-                    while self.isConnected():
+                    
+                    while self.isConnected(server):
                         try:
                             dirroot, file, upload_id, offset_, total_size = file_queue.get(block=False)
                             offset_b = int(offset_)
@@ -584,11 +537,13 @@ class Device:
                                 }
 
                             # Setup the progress bar
-                            with SocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=1+index, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as pbar:
+                            
+                            with MultiTargetSocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=1+index, source=self.m_config["source"], socket_events=socket_events) as pbar:
+                            # with SocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=1+index, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as pbar:
                                 def read_and_update(offset_b, parent):
 
                                     read_count = 0
-                                    while parent.isConnected():
+                                    while parent.isConnected(server):
                                         chunk = file.read(1024*1024)
                                         if not chunk:
                                             break
@@ -618,21 +573,27 @@ class Device:
                                 if response.status_code != 200:
                                     print("Error uploading file:", response.text)
 
-            # start the threads with thread id
-            threads = []
+            pool = eventlet.GreenPool(num_threads)
             for i in range(num_threads):
-                thread = Thread(target=worker, args=(i,))
-                thread.start()
-                threads.append(thread)
+                pool.spawn(worker, i)
 
-            # wait for all the threads to complete
-            for thread in threads:
-                thread.join()
+            pool.waitall()
 
-        if self.m_signal == "cancel":
+            # # start the threads with thread id
+            # threads = []
+            # for i in range(num_threads):
+            #     thread = Thread(target=worker, args=(i,))
+            #     thread.start()
+            #     threads.append(thread)
+
+            # # wait for all the threads to complete
+            # for thread in threads:
+            #     thread.join()
+
+        if self.m_signal.get(server, "") == "cancel":
             self.emitFiles()
 
-        self.m_signal = None
+        self.m_signal[server] = None
 
 
     def _removeFiles(self, files:list):
@@ -674,7 +635,7 @@ class Device:
         self._scan()
         self.emitFiles()
 
-    def emitFiles(self):
+    def emitFiles(self, sio=None):
         '''
         Send the list of files to the server. 
 
@@ -686,9 +647,6 @@ class Device:
         if len(self.m_files) == 0:
             debug_print("No files to send")
             return None
-
-        # clear out signals
-        self.m_signal = None
 
         robot_name = self.m_config.get("robot_name", None)
         project = self.m_config.get("project")
@@ -706,25 +664,30 @@ class Device:
             }
 
 
-        if self.m_sio.connected:
-            if project and len(project) > 1:
-                N = 20
-                packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
-                for pack in packs:
-                    self.m_sio.emit("device_files_items", {"source": source, "files": pack})
-                eventlet.sleep(0.5)
-            self.m_sio.emit("device_files", data)
+        if project and len(project) > 1:
+            N = 20
+            packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
+            for pack in packs:
+                if sio:
+                    sio.emit("device_files_items", {"source": source, "files": pack})
+                else:
+                    self._emit_to_all_servers("device_files_items", {"source": source, "files": pack})
+            eventlet.sleep(0.1)
+        if sio:
+            sio.emit("device_files", data)
+        else:
+            self._emit_to_all_servers("device_files", data)
 
 
 
-    def isConnected(self):
-        return self.m_sio.connected
+    # def isConnected(self):
+    #     return self.m_sio.connected
 
 
-    def do_disconnect(self):
-        debug_print("Got disconnect message from ui")
-        self.m_sio.disconnect()
-        return "Ok", 200
+    # def do_disconnect(self):
+    #     debug_print("Got disconnect message from ui")
+    #     self.m_sio.disconnect()
+    #     return "Ok", 200
 
     def index(self):
         return send_from_directory("static", "index.html")
@@ -737,20 +700,39 @@ class Device:
         rescan = False
  
         config = request.json
-        for key in config:
-            if key in self.m_config:
-                if self.m_config[key] != config[key]:
-                    changed = True
-                    if key == "watch":
-                        rescan = True
+        with self.session_lock:
+            for key in config:
+                if key in self.m_config:
+                    if self.m_config[key] != config[key]:
+                        changed = True
+                        if key == "watch":
+                            rescan = True
 
-                self.m_config[key] = config[key]
+                    self.m_config[key] = config[key]
                 
 
-        debug_print("updated config")
 
-        with open(self.m_config_filename, "w") as f:
-            yaml.dump(config, f)
+            debug_print("updated config")
+
+            with open(self.m_config_filename, "w") as f:
+                yaml.dump(config, f)
+
+        # add any server that was adding by the update
+        servers = self.m_config["servers"]
+        for server_address in servers:
+            if server_address not in self.server_threads:
+                self.start_server_thread(server_address)
+
+        to_remove = []
+
+        # remove any server that was deleted by the update and isn't zero conf. 
+        for server_address in self.server_threads:
+            if server_address not in self.m_config["servers"] and server_address not in self.m_config.get("zero_conf", []):
+                to_remove.append(server_address)
+
+        for server_address in to_remove:
+           self.stop_server_thread(server_address)
+
 
         os.chmod(self.m_config_filename, 0o777 )
 
@@ -761,36 +743,167 @@ class Device:
         if changed:
             self.emitFiles()
 
+        self.update_connections()
+
         return "Saved", 200
 
     def run(self):
+        for server_address in self.m_config["servers"]:
+            self.start_server_thread(server_address)
+
+    def start_server_thread(self, server_address):
+        # Initialize the "can run" flag and spawn a thread for the server
+        self.server_can_run[server_address] = True
+        thread = eventlet.spawn(self.manage_connection, server_address)
+        self.server_threads[server_address] = thread
+
+    def stop_server_thread(self, server_address):
+        # Set the "can run" flag to False to stop the server's thread
+        if server_address in self.server_can_run:
+            self.server_can_run[server_address] = False
+            thread = self.server_threads.pop(server_address, None)
+            if thread:
+                thread.kill()  # Kill the thread if necessary
+
+        with self.session_lock:
+            del self.server_can_run[server_address]
+            
+            if server_address in self.server_sio:
+                del self.server_sio[server_address]
+
+        self.m_local_dashboard_sio.emit("server_remove",  {"name": server_address})
+
+    def update_connections(self):
+        connections = {}
+        for server_address in self.server_can_run:
+            if  not self.server_can_run[server_address]:
+                continue 
+            sio = self.server_sio.get(server_address, None)
+            connections[server_address] = sio and sio.connected
+
+        debug_print(connections)
+        self.m_local_dashboard_sio.emit("server_connections", connections)
+
+    def manage_connection(self, server_address):
+        debug_print(f"Testing to {server_address}")
+
+        # check to see if this server is one of the zero conf server. 
+        # if it is, remove it from the run list.  
+        ip_address = None
+        name, port = server_address.split(":")
         try:
-            while True:
-                server =  self._find_server()
-                if server is None:
-                    debug_print("Sleeping....")
-                    eventlet.sleep(self.m_config["wait_s"])
-                    debug_print("slept")
-                    continue
+            ip_address = socket.gethostbyname(name)
+        except socket.gaierror as e:
+            pass 
 
-                debug_print("loops")
-                self.emitFiles()
+        if ip_address and f"{ip_address}:{port}" in self.m_config.get("zero_config", []):
+            self.server_can_run[server_address] = False
 
-                trigger = 0
-                while self.isConnected():
-                    if trigger > 10:
-                        trigger = 0
-                        self.m_sio.emit("keep_alive")
-                    else:
-                        trigger +=1
-                    eventlet.sleep(1)
-                debug_print("Got disconnected!")
+        debug_print("-")
+        
 
-        except KeyboardInterrupt:
-            debug_print("Terminated")
-            pass
+        while self.server_can_run.get(server_address, False):
 
-        sys.exit(0)
+
+            try:
+                self.test_connection(server_address)
+            except Exception as e:
+                debug_print(f"Error with server {server_address}: {e}")
+                eventlet.sleep(self.m_config["wait_s"])  
+
+    def test_connection(self, server_address):
+        sio = self._create_client()
+
+        @sio.event
+        def connect():
+            debug_print(f"connected {server_address}")
+            with self.session_lock:
+                self.server_sio[server_address] = sio
+
+            sio.emit('join', { 'room': self.m_config["source"], "type": "device" })                               
+            self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
+
+            self.emitFiles( sio ) 
+
+        @sio.event
+        def disconnect():
+            with self.session_lock:
+                self.server_sio[server_address] = None 
+
+            self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": False})
+
+        @sio.event
+        def device_send(data):
+            self._on_device_send(data, server_address)
+
+        @sio.event
+        def keep_alive_ack():
+            pass 
+
+        api_key_token = self.m_config["API_KEY_TOKEN"]
+        headers = {"X-Api-Key": api_key_token }
+
+        try:
+            sio.connect(f"http://{server_address}/socket.io", headers=headers, transports=['websocket'])
+
+            debug_print(f"Connected to {server_address}")
+    
+            sio.on('control_msg')(self._on_control_msg)
+            sio.on('update_entry')(self._on_update_entry)
+            sio.on('set_project')(self._on_set_project)
+            # self.m_sio.on('set_md5')(self._on_set_md5)
+            sio.on("device_scan")(self._on_device_scan)
+            # self.m_sio.on("device_send")(self._on_device_send)
+            sio.on("device_remove")(self.on_device_remove)
+            # self.m_sio.on("keep_alive_ack")(self._on_keep_alive_ack)
+
+        except socketio.exceptions.ConnectionError as e:
+            debug_print(f"Failed to connect to {server_address} because {e}")
+            sio.disconnect()
+
+        while self.server_can_run.get(server_address, False):
+            ts = self.m_config.get("wait_s", 5)
+            eventlet.sleep(ts)
+        
+        try:
+            sio.disconnect()
+        except Exception as e:
+            debug_print(f"Caught {e.what()} when trying to disconnect")
+
+        # debug_print(f"can run {server_address} is {self.server_can_run.get(server_address, False)}")
+        # if self.server_can_run.get(server_address, False):
+        #     ts = self.m_config.get("wait_s", 5)
+        #     debug_print(f"Retrying {server_address} in {ts} seconds")
+        #     eventlet.sleep(ts)
+
+    # def run(self):
+    #     try:
+    #         while True:
+    #             server =  self._find_server()
+    #             if server is None:
+    #                 debug_print("Sleeping....")
+    #                 eventlet.sleep(self.m_config["wait_s"])
+    #                 debug_print("slept")
+    #                 continue
+
+    #             debug_print("loops")
+    #             self.emitFiles()
+
+    #             trigger = 0
+    #             while self.isConnected():
+    #                 if trigger > 10:
+    #                     trigger = 0
+    #                     self.m_sio.emit("keep_alive")
+    #                 else:
+    #                     trigger +=1
+    #                 eventlet.sleep(1)
+    #             debug_print("Got disconnected!")
+
+    #     except KeyboardInterrupt:
+    #         debug_print("Terminated")
+    #         pass
+
+    #     sys.exit(0)
 
     def debug_socket(self):
         debug_print("start\n\nstart")

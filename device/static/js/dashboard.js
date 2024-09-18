@@ -135,23 +135,46 @@ $(document).ready(function () {
         serverStatusDiv.className = "connection_status_online";
         serverStatusDiv.textContent = "Server: Online";
 
-        let nameInput = document.getElementById("connection_server_name")
-        nameInput.value = msg.name 
+        // let nameInput = document.getElementById("connection_server_name")
+        // nameInput.value = msg.name 
+
+        window.serverStatus[msg.name] = msg.connected;
+        
+        updateConnections();
 
     });
 
-    socket.on("server_disconnect", function() {
-        let serverStatusDiv = document.getElementById('server_connection_status');
-        serverStatusDiv.className = "connection_status_offline";
-        serverStatusDiv.textContent = "Server: Disconnected";
+    socket.on("server_remove", function(msg) {
+        server_address = msg.name;
 
-        let nameInput = document.getElementById("connection_server_name")
-        nameInput.value = ""
+        if( window.serverStatus[server_address]) {
+            delete window.serverStatus[server_address];
+        }
 
-    });
+        updateConnections()
+    })
+
+    socket.on("server_connections", function(msg) {
+        window.serverStatus  = {}
+
+        $.each(msg, server_address => {
+            window.serverStatus[server_address] = msg[server_address];
+        })
+        updateConnections()
+    })
+
+    // socket.on("server_disconnect", function() {
+    //     let serverStatusDiv = document.getElementById('server_connection_status');
+    //     serverStatusDiv.className = "connection_status_offline";
+    //     serverStatusDiv.textContent = "Server: Disconnected";
+
+    //     let nameInput = document.getElementById("connection_server_name")
+    //     nameInput.value = ""
+
+    // });
 
     socket.on('device_status_tqdm', function (msg) {
-        console.log(msg)
+        //console.log(msg)
         updateProgress(msg, 'device-status-tqdm');
       });
 
@@ -162,8 +185,63 @@ $(document).ready(function () {
 });
 
 
+function updateConnections() {
+    container = document.getElementById("connection_list")
+    container.innerHTML = ""
+
+    connections = Object.entries(window.serverStatus).sort();
+    any_connected = false;
+
+    connections.forEach( element  => {
+        let connection_name = element[0];
+        let connected = element[1];
+
+        let id = "status_" + connection_name.replaceAll(".", "_").replaceAll(":", "_")
+        status_item = document.getElementById(id)
+        if( status_item == null ) {
+            status_item = document.createElement("div")
+            container.appendChild(status_item)
+        }
+        status_item.innerHTML = "";
+        
+        let icon = document.createElement("i")
+        status_item.appendChild(icon)
+
+        let span = document.createElement("span")
+        status_item.appendChild(span)
+        
+        if(connected) {
+            span.className = "connection_list_online"
+            icon.className = "bi bi-cloud-fill"
+            span.innerHTML = connection_name + " Connected"
+
+            any_connected = true;
+        } else {
+            span.className = "connection_list_offline"
+            span.innerHTML = connection_name
+
+            icon.className = "bi bi-cloud"
+        }
+
+    })
+
+    let serverStatusDiv = document.getElementById('server_connection_status');
+    if( any_connected) {
+    serverStatusDiv.className = "connection_status_online";
+    serverStatusDiv.textContent = "Server: Online";
+    } else {
+        serverStatusDiv.className = "connection_status_offline";
+        serverStatusDiv.textContent = "Server: Disconnected";
+    }
+    // $.each(connections, function( name, connected) {
+    //     console.log(name, connected)
+    // })
+}
+
 function debugSocket() {
     fetch("debug")
 }
 
 window.allProgressBars = {};
+
+window.serverStatus = {}
