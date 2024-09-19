@@ -112,6 +112,7 @@ class Device:
         debug_print("Dashboard connected")
 
         self.update_connections()
+        self.m_local_dashboard_sio.emit("title", self.m_config["source"])
         # for server_name, sio in self.server_sio.items():
         #     connected = sio and sio.connected
         #     self.m_local_dashboard_sio.emit("server_connect", {"name": server_name, "connected": connected})
@@ -718,6 +719,7 @@ class Device:
     def save_config(self):
         changed = False
         rescan = False
+        reconnect = False
  
         config = request.json
         with self.session_lock:
@@ -727,15 +729,26 @@ class Device:
                         changed = True
                         if key == "watch":
                             rescan = True
+                        if key == "robot_name":
+                            reconnect = True
 
                     self.m_config[key] = config[key]
                 
-
 
             debug_print("updated config")
 
             with open(self.m_config_filename, "w") as f:
                 yaml.dump(config, f)
+
+        os.chmod(self.m_config_filename, 0o777 )
+
+        if reconnect:
+            robot_name = self.m_config["robot_name"]
+            
+            self.m_config["source"] = get_source_by_mac_address(robot_name)
+            self.m_local_dashboard_sio.emit("title", self.m_config["source"])
+
+            self.disconnect_all()
 
         # add any server that was adding by the update
         servers = self.m_config["servers"]
@@ -754,7 +767,6 @@ class Device:
            self.stop_server_thread(server_address)
 
 
-        os.chmod(self.m_config_filename, 0o777 )
 
         if rescan:
             self._scan()
@@ -792,6 +804,11 @@ class Device:
                 del self.server_sio[server_address]
 
         self.m_local_dashboard_sio.emit("server_remove",  {"name": server_address})
+
+    def disconnect_all(self):
+        servers = sorted(self.server_threads)
+        for server_address in servers:
+            self.stop_server_thread(server_address)
 
     def update_connections(self):
         connections = {}

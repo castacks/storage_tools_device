@@ -163,6 +163,10 @@ $(document).ready(function () {
         updateConnections()
     })
 
+    socket.on("title", function(title) {
+        const div = document.getElementById("title")
+        div.innerHTML = title;
+    })
     // socket.on("server_disconnect", function() {
     //     let serverStatusDiv = document.getElementById('server_connection_status');
     //     serverStatusDiv.className = "connection_status_offline";
