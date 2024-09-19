@@ -584,11 +584,11 @@ class Device:
                                 for cid in range(1+splits):
                                     params["offset"] = offset_b
                                     params["cid"] = cid
-                                    debug_print(offset_b)
+                                    # debug_print(offset_b)
                                     # Make the POST request with the streaming data
                                     response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
 
-                                debug_print("Complete")
+                                # debug_print("Complete")
 
                                 if response.status_code != 200:
                                     print("Error uploading file:", response.text)
@@ -674,7 +674,7 @@ class Device:
             project = None 
         source = self.m_config["source"]
 
-        debug_print(f"project name is: {project}")
+        # debug_print(f"project name is: {project}")
         data = {
             "robot_name": robot_name,
             "project": project,
@@ -683,7 +683,7 @@ class Device:
             "total": len(self.m_files)
             }
 
-        debug_print(f"sending {len(self.m_files)}")
+        # debug_print(f"sending {len(self.m_files)}")
 
         if project and len(project) > 1:
             N = 20
@@ -861,8 +861,6 @@ class Device:
             self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
 
             eventlet.spawn( self.emitFiles, sio)
-            debug_print("----")
-            # self.emitFiles( sio ) 
 
         @sio.event
         def disconnect():
