@@ -59,7 +59,7 @@ def compute_md5(file_path, chunk_size=8192, position=None, socket_events=None, s
     return rtn
 
 
-def get_source_by_mac_address():
+def get_source_by_mac_address(robot_name):
     macs = []
     addresses = psutil.net_if_addrs()
     for interface in sorted(addresses):
@@ -70,8 +70,8 @@ def get_source_by_mac_address():
                 if psutil.net_if_stats()[interface].isup:
                     macs.append(addr.address.replace(":",""))
 
-    name = hashlib.sha256("_".join(macs).encode()).hexdigest()[:16]
-    rtn = f"DEV-{name}"
+    name = hashlib.sha256("_".join(macs).encode()).hexdigest()[:8]
+    rtn = f"DEV-{robot_name}-{name}"
 
     # rtn = "DEV-" + "_".join(macs)
     return rtn

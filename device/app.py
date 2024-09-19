@@ -30,9 +30,10 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", type=str, required=False, default="../config/config.yaml", help="Config file for this instance")
+    parser.add_argument("-s", "--salt", type=str, required=False)
     args = parser.parse_args()
 
-    device = Device(args.config, sockethost)
+    device = Device(args.config, sockethost, args.salt)
 
     def run_device():
         # Use a synchronous method compatible with Eventlet for running the device
@@ -46,6 +47,7 @@ if __name__ == "__main__":
     app.route("/save_config", methods=["POST"])(device.save_config)
     # app.route("/disconnect", methods=["GET"])(device.do_disconnect)
     app.route("/debug", methods=["GET"])(device.debug_socket)
+    app.route("/refresh", methods=["GET"])(device.on_refresh)
 
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)

@@ -33,7 +33,7 @@ from utils import compute_md5
 
 
 class Device:
-    def __init__(self, filename: str, local_dashboard_sio:SocketIO) -> None:
+    def __init__(self, filename: str, local_dashboard_sio:SocketIO, salt=None) -> None:
         """
         Initialize the Device object with a configuration file.
 
@@ -51,7 +51,13 @@ class Device:
             self.m_config = yaml.safe_load(f)
             debug_print(json.dumps(self.m_config, indent=True))
 
-        self.m_config["source"] = get_source_by_mac_address()
+        robot_name = self.m_config.get("robot_name", "robot")
+
+        self.m_config["source"] = get_source_by_mac_address(robot_name)
+
+        if salt:
+            self.m_config["source"] += str(salt)
+
         debug_print(f"Setting source name to {self.m_config['source']}")
 
         self.m_config["servers"] = self.m_config.get("servers", [])
@@ -114,6 +120,12 @@ class Device:
     def on_local_dashboard_disconnect(self):
         debug_print("Dashboard disconnected")
         pass
+
+    def on_refresh(self):
+        debug_print("refresh")
+        self.emitFiles()
+        return "ok", 200
+
 
     def on_change(self, zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
         if name != self.m_zero_conf_name:
@@ -281,7 +293,11 @@ class Device:
             file_queue = queue.Queue()
             rtn_queue = queue.Queue()
             for entry in entries:
-                fullpath = os.path.join(entry["dirroot"], entry["filename"])
+                try:
+                    fullpath = os.path.join(entry["dirroot"], entry["filename"])
+                except Exception as e:
+                    debug_print(json.dumps(entry, indent=True))
+                    raise e
 
                 last_modified = os.path.getmtime(fullpath)
                 do_compute = False
@@ -567,8 +583,11 @@ class Device:
                                 for cid in range(1+splits):
                                     params["offset"] = offset_b
                                     params["cid"] = cid
+                                    debug_print(offset_b)
                                     # Make the POST request with the streaming data
                                     response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
+
+                                debug_print("Complete")
 
                                 if response.status_code != 200:
                                     print("Error uploading file:", response.text)
@@ -663,6 +682,7 @@ class Device:
             "total": len(self.m_files)
             }
 
+        debug_print(f"sending {len(self.m_files)}")
 
         if project and len(project) > 1:
             N = 20
@@ -823,7 +843,9 @@ class Device:
             sio.emit('join', { 'room': self.m_config["source"], "type": "device" })                               
             self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
 
-            self.emitFiles( sio ) 
+            eventlet.spawn( self.emitFiles, sio)
+            debug_print("----")
+            # self.emitFiles( sio ) 
 
         @sio.event
         def disconnect():

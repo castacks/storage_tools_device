@@ -242,6 +242,10 @@ function debugSocket() {
     fetch("debug")
 }
 
+function refresh() {
+    fetch("refresh")
+}
+
 window.allProgressBars = {};
 
 window.serverStatus = {}
