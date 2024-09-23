@@ -60,7 +60,7 @@ You must update all *Required* fields.
 * **Project Name**:  Name of the project. If this is empty, the server will ask you to fill in the name.
 * **Robot Name**: (Required) Name of this robot. This should be unique within the project.
 * **API Key Token**: (Required) The API_KEY_TOKEN for this robot. Your admin can provide this to you. If you are running your own upload server, it is set in the Config->Keys page.
-* **Watch**: (Required) The list of directories to be watched.  Any file with a matching suffix (see Include Suffix) will be uploaded. These all must be in the same subdirectory as `DATA_DIR` from the `env.sh` file.
+* **Watch**: (Required) The list of directories to be watched.  Any file with a matching suffix (see Include Suffix) will be uploaded. These all must be in the same subdirectory as `DATA_DIR` from the `config.env` file.
 * **Servers**:  List of potential servers.  If this is empty, the Device will search for servers using ZeroConf.
 * **Local Time Zone**: The time zone that the logs were recorded in.
 * **Threads**: The number of threads used for uploading from this device to the server.
