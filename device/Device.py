@@ -95,6 +95,10 @@ class Device:
         self.server_sessions = {}  # Stores session ID for each server
         self.server_sio = {} # maps server to socket. 
 
+        # list of connected servers
+        self.m_connected_servers = []
+        self.m_address_to_source = {}
+
     def _create_client(self):
         sio = socketio.Client(
             reconnection=True,
@@ -248,7 +252,7 @@ class Device:
 
     def _scan(self):
         debug_print("Scanning for files")
-        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files"})
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files", "room": self.m_config["source"]})
 
         self.m_fs_info = {}
         entries = []
@@ -256,7 +260,7 @@ class Device:
         for dirroot in self.m_config["watch"]:
             debug_print("Scanning " + dirroot)
 
-            self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files"})
+            self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files", "room": self.m_config["source"]})
 
             if os.path.exists(dirroot):
                 dev = os.stat(dirroot).st_dev
@@ -300,7 +304,12 @@ class Device:
                     debug_print(json.dumps(entry, indent=True))
                     raise e
 
-                last_modified = os.path.getmtime(fullpath)
+                try:
+                    last_modified = os.path.getmtime(fullpath)
+                except FileNotFoundError:
+                    # something happened between here and there, now was can't find the file!
+                    pass  
+
                 do_compute = False
                 if fullpath not in self.m_md5:
                     do_compute = True
@@ -340,7 +349,7 @@ class Device:
         except ValueError:
             pass
 
-        self._emit_to_all_servers("device_status", {"source": self.m_config["source"]})
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})
 
         self.m_files = rtn
         return rtn
@@ -373,13 +382,15 @@ class Device:
                     except ValueError:
                         break
 
+                    if not os.path.exists(fullpath):
+                        continue
+
                     metadata_filename = fullpath + ".metadata"
                     if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
                         device_entry = json.load(open(metadata_filename, "r"))
 
                     else:
                         size = os.path.getsize(fullpath)
-
                         metadata = getMetaData(fullpath, self.m_local_tz)
                         if metadata is None:
                             # invalid file!
@@ -459,6 +470,10 @@ class Device:
         self._sendFiles(server, files)
 
 
+    def _on_duplicate(self):
+        
+        pass 
+
     def on_device_remove(self, data):
         # debug_print(data)
         source = data.get("source")
@@ -491,6 +506,8 @@ class Device:
 
         split_size_gb = self.m_config.get("split_size_gb", 1)
 
+        debug_print(filelist)
+
         total_size = 0
         file_queue = queue.Queue()
         for file_pair in filelist:
@@ -507,10 +524,11 @@ class Device:
         # Outer send loop progress bar. 
 
         event = "device_status_tqdm"
-        socket_events = [(self.m_local_dashboard_sio, event, None), (self.server_sio[server], event, None)]
+        socket_events = [(self.m_local_dashboard_sio, event, None)]
+        if server in self.server_sio:
+            socket_events.append( (self.server_sio[server], event, None) )
 
         with MultiTargetSocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
-        # with SocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
 
             # Worker thread. 
             # Reads the file_queue until 
@@ -599,17 +617,6 @@ class Device:
 
             pool.waitall()
 
-            # # start the threads with thread id
-            # threads = []
-            # for i in range(num_threads):
-            #     thread = Thread(target=worker, args=(i,))
-            #     thread.start()
-            #     threads.append(thread)
-
-            # # wait for all the threads to complete
-            # for thread in threads:
-            #     thread.join()
-
         if self.m_signal.get(server, "") == "cancel":
             self.emitFiles()
 
@@ -689,26 +696,23 @@ class Device:
             N = 20
             packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
             for pack in packs:
+                msg = {
+                    "source": source,
+                    "files": pack,
+                    "room": self.m_config["source"]
+                }
                 if sio:
-                    sio.emit("device_files_items", {"source": source, "files": pack})
+                    sio.emit("device_files_items", msg)
                 else:
-                    self._emit_to_all_servers("device_files_items", {"source": source, "files": pack})
+                    self._emit_to_all_servers("device_files_items", msg)
             eventlet.sleep(0.1)
-        if sio:
-            sio.emit("device_files", data)
-        else:
-            self._emit_to_all_servers("device_files", data)
-
-
-
-    # def isConnected(self):
-    #     return self.m_sio.connected
-
-
-    # def do_disconnect(self):
-    #     debug_print("Got disconnect message from ui")
-    #     self.m_sio.disconnect()
-    #     return "Ok", 200
+        try:
+            if sio:
+                sio.emit("device_files", data)
+            else:
+                self._emit_to_all_servers("device_files", data)
+        except socketio.exceptions.BadNamespaceError:
+            pass 
 
     def index(self):
         return send_from_directory("static", "index.html")
@@ -860,7 +864,6 @@ class Device:
             sio.emit('join', { 'room': self.m_config["source"], "type": "device" })                               
             self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
 
-            eventlet.spawn( self.emitFiles, sio)
 
         @sio.event
         def disconnect():
@@ -876,6 +879,10 @@ class Device:
         @sio.event
         def keep_alive_ack():
             pass 
+
+        @sio.event
+        def dashboard_info(data):
+            eventlet.spawn( self.emitFiles, sio)
 
         api_key_token = self.m_config["API_KEY_TOKEN"]
         headers = {"X-Api-Key": api_key_token }
@@ -907,40 +914,6 @@ class Device:
         except Exception as e:
             debug_print(f"Caught {e.what()} when trying to disconnect")
 
-        # debug_print(f"can run {server_address} is {self.server_can_run.get(server_address, False)}")
-        # if self.server_can_run.get(server_address, False):
-        #     ts = self.m_config.get("wait_s", 5)
-        #     debug_print(f"Retrying {server_address} in {ts} seconds")
-        #     eventlet.sleep(ts)
-
-    # def run(self):
-    #     try:
-    #         while True:
-    #             server =  self._find_server()
-    #             if server is None:
-    #                 debug_print("Sleeping....")
-    #                 eventlet.sleep(self.m_config["wait_s"])
-    #                 debug_print("slept")
-    #                 continue
-
-    #             debug_print("loops")
-    #             self.emitFiles()
-
-    #             trigger = 0
-    #             while self.isConnected():
-    #                 if trigger > 10:
-    #                     trigger = 0
-    #                     self.m_sio.emit("keep_alive")
-    #                 else:
-    #                     trigger +=1
-    #                 eventlet.sleep(1)
-    #             debug_print("Got disconnected!")
-
-    #     except KeyboardInterrupt:
-    #         debug_print("Terminated")
-    #         pass
-
-    #     sys.exit(0)
 
     def debug_socket(self):
         debug_print("start\n\nstart")
