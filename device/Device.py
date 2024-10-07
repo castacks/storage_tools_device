@@ -1234,12 +1234,12 @@ class Device:
 
         @sio.event
         def dashboard_info(data):
-            debug_print("yo")
+            # debug_print("yo")
             # eventlet.spawn( self.emitFiles, sio)
             # self._scan(emit=True)
             self._background_scan()
 
-            debug_print("yip")
+            # debug_print("yip")
             pass 
 
         api_key_token = self.m_config["API_KEY_TOKEN"]
