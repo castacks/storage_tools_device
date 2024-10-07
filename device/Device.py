@@ -1,6 +1,12 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
+import urllib
+
+import xxhash
 from SocketIOTQDM import SocketIOTQDM, MultiTargetSocketIOTQDM
 from debug_print import debug_print
+import reindexMCAP
 from flask import request 
 
 
@@ -10,11 +16,14 @@ import socketio
 import socketio.exceptions
 import yaml
 from flask import jsonify, send_from_directory
-from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
+from zeroconf import ServiceBrowser, ServiceStateChange
+from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
+
 from flask_socketio import SocketIO
 from eventlet import tpool
 import eventlet 
 from eventlet.lock import Semaphore as Lock
+
 
 import json
 import os
@@ -26,8 +35,7 @@ from datetime import datetime
 from threading import Thread
 from typing import cast
 
-from utils import get_source_by_mac_address, getDateFromFilename, getMetaData
-from utils import compute_md5
+from utils import get_source_by_mac_address, getDateFromFilename, getMetaData, pbar_thread
 
 
 
@@ -72,7 +80,7 @@ class Device:
         self.m_md5 = {}
         self.m_updates = {}
         self.m_computeMD5 = self.m_config.get("computeMD5", True)
-        self.m_chunk_size = self.m_config.get("chunk_size", 8192)
+        self.m_chunk_size = self.m_config.get("chunk_size", 8192*1024)
 
         self.m_local_tz = self.m_config.get("local_tz", "America/New_York")
 
@@ -84,9 +92,9 @@ class Device:
             sys.exit(1)
 
         services = ['_http._tcp.local.']
-        self.m_zeroconfig = Zeroconf()
+        self.m_zeroconfig = AsyncZeroconf()
         self.m_zero_conf_name = "Airlab_storage._http._tcp.local."
-        self.browser = ServiceBrowser(self.m_zeroconfig, services, handlers=[self.on_change])
+        self.browser = ServiceBrowser(self.m_zeroconfig.zeroconf, services, handlers=[self.on_change])
 
 
         self.session_lock = Lock()
@@ -98,6 +106,12 @@ class Device:
         # list of connected servers
         self.m_connected_servers = []
         self.m_address_to_source = {}
+
+        # thread to do scaning.  
+        self.m_scan_thread = None 
+        self.m_reindex_thread = None 
+        self.m_metadata_thread = None 
+        self.m_hash_thread = None 
 
     def _create_client(self):
         sio = socketio.Client(
@@ -132,34 +146,39 @@ class Device:
         return "ok", 200
 
 
-    def on_change(self, zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
-        if name != self.m_zero_conf_name:
-            return
+    def on_restart_connections(self):
+        # self.server_sio[server_address] = sio
+        with self.session_lock:
+            for sio in self.server_sio.values():
+                sio.disconnect()
+            
+        return "ok", 200
 
+
+    async def _resolve_service_info(self, zeroconf: AsyncZeroconf, service_type: str, name: str):
+        info = AsyncServiceInfo(service_type, name)
+        if await info.async_request(zeroconf, 3000):
+            addresses = [
+                f"{addr}:{cast(int, info.port)}" for addr in info.parsed_scoped_addresses()
+            ]
+
+        for address in addresses:
+            if address in self.m_config["servers"]:
+                continue
+            self.m_config["zero_conf"] =self.m_config.get("zero_conf", [])
+            if address in self.m_config["zero_conf"]:
+                continue
+            self.m_config["zero_conf"].append(address)
+            debug_print(f"added {address}")
+
+        # pick the first server
+        if len(self.m_config.get("zero_conf", [])) > 0:
+            server = self.m_config["zero_conf"][0]
+            self.start_server_thread(server)
+
+    def on_change(self, zeroconf: AsyncZeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
         if state_change is ServiceStateChange.Added:
-            # info = zeroconf.get_service_info(service_type, name)
-            info = tpool.execute(zeroconf.get_service_info, service_type, name)
-
-            if info:
-                addresses = [
-                    "%s:%d" % (addr, cast(int, info.port))
-                    for addr in info.parsed_scoped_addresses()
-                ]
-
-            for address in addresses:
-                if address in self.m_config["servers"]:
-                    continue
-                self.m_config["zero_conf"] =self.m_config.get("zero_conf", [])
-                if address in self.m_config["zero_conf"]:
-                    continue
-                self.m_config["zero_conf"].append(address)
-                debug_print(f"added {address}")
-
-            # pick the first server
-            if len(self.m_config.get("zero_conf", [])) > 0:
-                server = self.m_config["zero_conf"][0]
-                self.start_server_thread(server)
-
+            self.m_local_dashboard_sio.start_background_task(asyncio.ensure_future, self._resolve_service_info(zeroconf, service_type, name))
 
 
     def _on_disconnect(self):
@@ -250,18 +269,300 @@ class Device:
             if sio and sio.connected:
                 sio.emit(event, msg)
 
-    def _scan(self):
-        debug_print("Scanning for files")
-        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files", "room": self.m_config["source"]})
+    def _background_reindex(self):
+        if self.m_reindex_thread is not None:
+            return 
+        
+        # placeholder to keep the other threads out
+        self.m_reindex_thread = True 
 
-        self.m_fs_info = {}
-        entries = []
+        all_files = []
+        event = "device_status_tqdm"
+        socket_events = [(self.m_local_dashboard_sio, event, None)]
+        for sio in self.server_sio.values():
+            if sio and sio.connected:
+                socket_events.append((sio, event, None))
+        bad_files = []
         total_size = 0
+
+        source = self.m_config["source"]
+        max_threads = self.m_config["threads"]
+        message_queue = queue.Queue()
+        desc = "reindex"
+
+
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files", "room": self.m_config["source"]})
         for dirroot in self.m_config["watch"]:
-            debug_print("Scanning " + dirroot)
-
             self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files", "room": self.m_config["source"]})
+            for root, _, files in os.walk(dirroot):
+                for basename in files:
+                    if not self._include(basename):
+                        continue
+                    
+                    if basename.startswith("._"):
+                        continue
 
+                    if basename.endswith(".mcap"):
+                        all_files.append(os.path.join(root, basename))
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})        
+
+        with MultiTargetSocketIOTQDM(total=len(all_files), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+            for fullpath in all_files:
+                if not reindexMCAP.test_mcap_file(fullpath):
+                    bad_files.append(fullpath)
+                    total_size += os.path.getsize(fullpath)
+                main_pbar.update()
+        
+        if len(bad_files) > 0:
+
+            def reindex_worker(args):
+                message_queue, filename = args 
+                size = os.path.getsize(filename)
+
+                status, msg = reindexMCAP.recover_mcap(filename)
+                if not status:
+                    debug_print(msg)
+
+                message_queue.put({"main_pbar": size})
+                return filename, status
+
+
+            repaired_files = []
+            pool_queue = [ (message_queue, filename) for filename in bad_files ]
+
+            thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
+            thread.start()
+
+            try:
+                with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                    results = {}
+                    for name, status in executor.map(reindex_worker, pool_queue):
+                        repaired_files.append((name, status))
+
+            finally:
+                message_queue.put({"close": True})
+
+        self.m_reindex_thread = None
+
+        self._background_metadata()
+        pass 
+
+    def _background_metadata(self):
+        if self.m_metadata_thread is not None:
+            return 
+        self.m_metadata_thread = True 
+
+        all_files = []
+        event = "device_status_tqdm"
+        socket_events = [(self.m_local_dashboard_sio, event, None)]
+        for sio in self.server_sio.values():
+            if sio and sio.connected:
+                socket_events.append((sio, event, None))
+        total_size = 0
+
+        source = self.m_config["source"]
+        max_threads = self.m_config["threads"]
+        message_queue = queue.Queue()
+        desc = "Get Metadata"
+
+
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files", "room": self.m_config["source"]})
+        for dirroot in self.m_config["watch"]:
+            self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files", "room": self.m_config["source"]})
+            for root, _, files in os.walk(dirroot):
+                for basename in files:
+                    if not self._include(basename):
+                        continue
+                    
+                    if basename.startswith("._"):
+                        continue
+
+                    filename = os.path.join(root, basename).replace(dirroot, "")
+                    filename = filename.strip("/")
+                    fullpath = os.path.join(root, basename)
+                    all_files.append((dirroot, filename, fullpath))
+                    total_size += os.path.getsize(fullpath)
+
+        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})        
+
+        if len(all_files) > 0:
+
+            robot_name = self.m_config.get("robot_name", None)
+
+            def metadata_worker(args):
+                message_queue, dirroot, filename, fullpath = args 
+
+                if not os.path.exists(fullpath):
+                    message_queue.put({"main_pbar": 1})
+                    return 
+
+                size = os.path.getsize(fullpath)
+                metadata_filename = fullpath + ".metadata"
+                if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
+                    device_entry = json.load(open(metadata_filename, "r"))
+
+                else:
+                    metadata = getMetaData(fullpath, self.m_local_tz)
+                    # eventlet.sleep(0)
+                    if metadata is None:
+                        # invalid file! silently ignore invalid files! 
+                        message_queue.put({"main_pbar": size})
+                        return 
+
+                    formatted_date = getDateFromFilename(fullpath)
+                    if formatted_date is None:
+                        creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
+                        formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
+                    start_time = metadata.get("start_time", formatted_date)
+                    end_time = metadata.get("end_time", formatted_date)
+
+                    device_entry = {
+                        "dirroot": dirroot,
+                        "filename": filename,
+                        "size": size,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "site": None,
+                        "robot_name": robot_name,
+                        "md5": None
+                    }
+                    device_entry.update(metadata)
+
+                if filename in self.m_updates:
+                    device_entry.update( self.m_updates[filename])
+
+                try:
+                    with open(metadata_filename, "w") as fid:
+                        json.dump(device_entry, fid, indent=True)
+                    os.chmod(metadata_filename, 0o777)
+                    
+                except PermissionError as e:
+                    debug_print(f"Failed to write [{metadata_filename}]. Permission Denied")
+                except Exception as e:
+                    debug_print(f"Error writing [{metadata_filename}]: {e}")
+
+                message_queue.put({"main_pbar": size})
+
+                return device_entry 
+
+            entries = []
+            pool_queue = [ (message_queue, dirroot, filename, fullpath) for (dirroot, filename, fullpath) in all_files ]
+
+            thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
+            thread.start()
+
+            try:
+                with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                    for entry in executor.map(metadata_worker, pool_queue):
+                        if entry:
+                            entries.append(entry)
+
+            finally:
+                message_queue.put({"close": True})
+
+            self.m_files = entries
+
+        self.m_metadata_thread = None
+
+        self._background_hash()
+
+    def _background_hash(self):
+        if self.m_hash_thread is not None:
+            return 
+        
+        self.m_hash_thread = True 
+        entries = self.m_files.copy()
+
+        event = "device_status_tqdm"
+        socket_events = [(self.m_local_dashboard_sio, event, None)]
+        for sio in self.server_sio.values():
+            if sio and sio.connected:
+                socket_events.append((sio, event, None))
+        total_size = 0
+
+        source = self.m_config["source"]
+        max_threads = self.m_config["threads"]
+        message_queue = queue.Queue()
+        desc = "Get File Hash"
+
+
+        if len(entries) > 0:            
+            for entry in entries:
+                if not entry:
+                    continue
+                filename = os.path.join(entry["dirroot"], entry["filename"])
+                if os.path.exists(filename):
+                    total_size += os.path.getsize(filename)
+                
+
+            def hash_worker(args):
+                message_queue, entry, chunk_size = args 
+                filename = os.path.join(entry["dirroot"], entry["filename"])
+                if not os.path.exists(filename):
+                    return None 
+                size = os.path.getsize(filename)
+                cache_name = filename + ".md5"
+                if os.path.exists(cache_name) and os.path.getmtime(cache_name) > os.path.getmtime(filename):
+                    entry["md5"] = json.load(open(cache_name))
+                    message_queue.put({"main_pbar": size})
+                    return entry
+                    
+
+                x = xxhash.xxh128()
+                name = urllib.parse.quote(filename).replace("/", "_")
+
+                try:
+                    with open(filename, 'rb') as f:
+                        desc = os.path.basename(filename)
+                        message_queue.put({"child_pbar": name, "desc": desc, "size": size, "action": "start"})
+
+                        while chunk := f.read(chunk_size):
+                            x.update(chunk)
+                            update = len(chunk)
+                            message_queue.put({"main_pbar": update})
+                            message_queue.put({"child_pbar": name, "size": update, "action": "update"})
+
+                        message_queue.put({"child_pbar": name, "action": "close"})
+                except Exception as e:
+                    debug_print(f"Caught exception {e}")
+
+                entry["md5"] = x.hexdigest()
+                with open(cache_name, "w") as fid:
+                    json.dump(entry["md5"], fid)
+
+                # debug_print(f"exit {os.path.basename(filename)}")
+                return entry 
+
+            pool_queue = [ (message_queue, entry, self.m_chunk_size) for entry in entries ]
+
+            thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
+            thread.start()
+
+            entries = []
+
+            try:
+                with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                    results = {}
+                    for entry in executor.map(hash_worker, pool_queue):
+                        entries.append(entry)
+
+            finally:
+                message_queue.put({"close": True})
+
+        self.m_files = entries
+        self.m_hash_thread = None
+
+        self.emitFiles()
+
+    def _background_scan(self):
+
+        self.m_local_dashboard_sio.start_background_task(self._background_reindex)
+        pass 
+
+    def _update_fs_info(self):
+        self.m_fs_info = {}
+
+        for dirroot in self.m_config["watch"]:
             if os.path.exists(dirroot):
                 dev = os.stat(dirroot).st_dev
                 if not dev in self.m_fs_info:
@@ -269,196 +570,198 @@ class Device:
                     free_percentage = (free / total) * 100
                     self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
 
-            filenames = []
-            for root, _, files in os.walk(dirroot):
-                for file in files:
-                    if not self._include(file):
-                        continue
-                    filename = os.path.join(root, file).replace(dirroot, "")
-                    filename = filename.strip("/")
-                    fullpath = os.path.join(root, file)
-                    filenames.append((dirroot, filename, fullpath))
 
-        entries, total_size = self._get_metadata(filenames)
+    # def _scan(self, emit=True):
+    #     debug_print("Scanning for files")
+    #     self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files", "room": self.m_config["source"]})
 
-        rtn = self._do_md5sum(entries, total_size)
+    #     self.m_fs_info = {}
+    #     entries = []
+    #     total_size = 0
+    #     for dirroot in self.m_config["watch"]:
+    #         debug_print("Scanning " + dirroot)
 
-        debug_print("scan complete")
-        return rtn
+    #         self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files", "room": self.m_config["source"]})
 
-    def _do_md5sum(self, entries, total_size):
+    #         if os.path.exists(dirroot):
+    #             dev = os.stat(dirroot).st_dev
+    #             if not dev in self.m_fs_info:
+    #                 total, used, free = shutil.disk_usage(dirroot)
+    #                 free_percentage = (free / total) * 100
+    #                 self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
 
-        event = "device_status_tqdm"
-        socket_events = [(self.m_local_dashboard_sio, event, None)]
-        for sio in self.server_sio.values():
-            if sio and sio.connected:
-                socket_events.append((sio, event, None))
+    #         filenames = []
+    #         for root, _, files in os.walk(dirroot):
+    #             for file in files:
+    #                 if not self._include(file):
+    #                     continue
+    #                 filename = os.path.join(root, file).replace(dirroot, "")
+    #                 filename = filename.strip("/")
+    #                 fullpath = os.path.join(root, file)
+    #                 filenames.append((dirroot, filename, fullpath))
 
-        with MultiTargetSocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
-            file_queue = queue.Queue()
-            rtn_queue = queue.Queue()
-            for entry in entries:
-                try:
-                    fullpath = os.path.join(entry["dirroot"], entry["filename"])
-                except Exception as e:
-                    debug_print(json.dumps(entry, indent=True))
-                    raise e
+    #     entries, total_size = self._get_metadata(filenames)
 
-                try:
-                    last_modified = os.path.getmtime(fullpath)
-                except FileNotFoundError:
-                    # something happened between here and there, now was can't find the file!
-                    pass  
+    #     debug_print(f"entries: {len(entries)}")
+    #     self.m_files = entries
 
-                do_compute = False
-                if fullpath not in self.m_md5:
-                    do_compute = True
-                elif self.m_md5[fullpath]["last_modified"] > last_modified:
-                    do_compute = True
-
-                if do_compute:
-                    file_queue.put((fullpath, entry))
-
-            def worker(position:int):
-                while True:
-                    try:
-                        fullpath, entry = file_queue.get(block=False)
-                    except queue.Empty:
-                        break
-                    except ValueError:
-                        break
-
-                    if self.m_computeMD5:
-                        md5 = compute_md5(fullpath, self.m_chunk_size, 1+position, socket_events, source=self.m_config["source"], main_pbar=main_pbar)
-                    else:
-                        md5 = "0"
-                    entry["md5"] = md5
-                    rtn_queue.put(entry)
-
-            num_threads = min(self.m_config["threads"], len(entries))
-            pool = eventlet.GreenPool(num_threads)
-
-            for i in range(num_threads):
-                pool.spawn(worker, i)
-            pool.waitall()
-
-        rtn = []
-        try:
-            while not rtn_queue.empty():
-                rtn.append(rtn_queue.get())
-        except ValueError:
-            pass
-
-        self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})
-
-        self.m_files = rtn
-        return rtn
-
-    def _get_metadata(self, filenames):
-
-        event = "device_status_tqdm"
-
-        socket_events = [(self.m_local_dashboard_sio, event, None)]
-        for sio in self.server_sio.values():
-            if sio and sio.connected:
-                socket_events.append((sio, event, None))
+    #     # if self.m_scan_thread is None:
+    #     #     self.m_scan_thread =  eventlet.spawn(self._do_md5sum, entries)
 
 
-        with MultiTargetSocketIOTQDM(total=len(filenames), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
-            file_queue = queue.Queue()
-            entries_queue = queue.Queue()
+    #     # rtn = self._do_md5sum(entries, total_size, do_md5=do_md5)
 
-            robot_name = self.m_config.get("robot_name", None)
+    #     debug_print("scan complete")
+        
+    #     if emit:
+    #         self.emitFiles()
+    #     return entries
 
-            for item in filenames:
-                file_queue.put(item)
+    # def _do_md5sum(self, entries):
+    #     debug_print("hash hash")
 
-            def worker(position:int):
-                while True:
-                    try:
-                        dirroot, filename, fullpath = file_queue.get(block=False)
-                    except queue.Empty:
-                        break
-                    except ValueError:
-                        break
+    #     event = "device_status_tqdm"
+    #     socket_events = [(self.m_local_dashboard_sio, event, None)]
+    #     for sio in self.server_sio.values():
+    #         if sio and sio.connected:
+    #             socket_events.append((sio, event, None))
 
-                    if not os.path.exists(fullpath):
-                        continue
 
-                    metadata_filename = fullpath + ".metadata"
-                    if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
-                        device_entry = json.load(open(metadata_filename, "r"))
+    #     event_mapping = {}
+    #     file_list = []
+    #     for entry in entries:
+    #         fullpath = os.path.join(entry["dirroot"], entry["filename"])
+    #         event_mapping[fullpath] = entry
+    #         file_list.append(fullpath)
 
-                    else:
-                        size = os.path.getsize(fullpath)
-                        metadata = getMetaData(fullpath, self.m_local_tz)
-                        if metadata is None:
-                            # invalid file!
-                            # silently ignore invalid files! 
-                            continue
+    #     num_threads = min(self.m_config["threads"], len(entries))
 
-                        formatted_date = getDateFromFilename(fullpath)
-                        if formatted_date is None:
-                            creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
-                            formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
-                        start_time = metadata.get("start_time", formatted_date)
-                        end_time = metadata.get("end_time", formatted_date)
+    #     rtn = []
+    #     file_hash = multithread_md5(file_list, socket_events=socket_events, source=self.m_config["source"], chunk_size=self.m_chunk_size, max_threads=num_threads)
+    #     for entry in entries:
+    #         fullpath = os.path.join(entry["dirroot"], entry["filename"])
+    #         if fullpath in file_hash:
+    #             entry["md5"] = file_hash[fullpath]
+    #         rtn.append(entry)
 
-                        device_entry = {
-                            "dirroot": dirroot,
-                            "filename": filename,
-                            "size": size,
-                            "start_time": start_time,
-                            "end_time": end_time,
-                            "site": None,
-                            "robot_name": robot_name,
-                            "md5": None
-                        }
-                        device_entry.update(metadata)
+    #     self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})
 
-                    if filename in self.m_updates:
-                        device_entry.update( self.m_updates[filename])
+    #     self.m_files = rtn
 
-                    entries_queue.put(device_entry)
+    #     self.emitFiles()
+    #     self.m_scan_thread = None 
 
-                    try:
-                        with open(metadata_filename, "w") as fid:
-                            json.dump(device_entry, fid, indent=True)
-                        os.chmod(metadata_filename, 0o777)
+    #     return rtn
+
+    # def _get_metadata(self, filenames):
+
+    #     event = "device_status_tqdm"
+
+    #     socket_events = [(self.m_local_dashboard_sio, event, None)]
+    #     for sio in self.server_sio.values():
+    #         if sio and sio.connected:
+    #             socket_events.append((sio, event, None))
+
+
+    #     with MultiTargetSocketIOTQDM(total=len(filenames), desc="Generating Metadata", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
+    #         file_queue = queue.Queue()
+    #         entries_queue = queue.Queue()
+
+    #         robot_name = self.m_config.get("robot_name", None)
+
+    #         for item in filenames:
+    #             file_queue.put(item)
+
+    #         def worker(position:int):
+    #             while True:
+    #                 try:
+    #                     dirroot, filename, fullpath = file_queue.get(block=False)
+    #                 except queue.Empty:
+    #                     break
+    #                 except ValueError:
+    #                     break
+
+    #                 if not os.path.exists(fullpath):
+    #                     continue
+
+    #                 metadata_filename = fullpath + ".metadata"
+    #                 if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
+    #                     device_entry = json.load(open(metadata_filename, "r"))
+
+    #                 else:
+    #                     size = os.path.getsize(fullpath)
+    #                     metadata = getMetaData(fullpath, self.m_local_tz)
+    #                     # eventlet.sleep(0)
+    #                     if metadata is None:
+    #                         # invalid file! silently ignore invalid files! 
+    #                         continue
+
+    #                     formatted_date = getDateFromFilename(fullpath)
+    #                     if formatted_date is None:
+    #                         creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
+    #                         formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
+    #                     start_time = metadata.get("start_time", formatted_date)
+    #                     end_time = metadata.get("end_time", formatted_date)
+
+    #                     device_entry = {
+    #                         "dirroot": dirroot,
+    #                         "filename": filename,
+    #                         "size": size,
+    #                         "start_time": start_time,
+    #                         "end_time": end_time,
+    #                         "site": None,
+    #                         "robot_name": robot_name,
+    #                         "md5": None
+    #                     }
+    #                     device_entry.update(metadata)
+
+    #                 if filename in self.m_updates:
+    #                     device_entry.update( self.m_updates[filename])
+
+    #                 entries_queue.put(device_entry)
+
+    #                 try:
+    #                     with open(metadata_filename, "w") as fid:
+    #                         json.dump(device_entry, fid, indent=True)
+    #                     os.chmod(metadata_filename, 0o777)
                         
-                    except PermissionError as e:
-                        debug_print(f"Failed to write [{metadata_filename}]. Permission Denied")
-                    except Exception as e:
-                        debug_print(f"Error writing [{metadata_filename}]: {e}")
+    #                 except PermissionError as e:
+    #                     debug_print(f"Failed to write [{metadata_filename}]. Permission Denied")
+    #                 except Exception as e:
+    #                     debug_print(f"Error writing [{metadata_filename}]: {e}")
 
-                    main_pbar.update()
+    #                 main_pbar.update()
 
 
-            num_threads = min(self.m_config["threads"], len(filenames))
-            pool = eventlet.GreenPool(num_threads)
+    #         num_threads = min(self.m_config["threads"], len(filenames))
 
-            for i in range(num_threads):
-                pool.spawn(worker, i)
-            pool.waitall()
 
-        entries = []
-        total_size = 0
-        try:
-            while not entries_queue.empty():
-                entry = entries_queue.get()
-                entries.append(entry)
-                total_size += entry["size"]
-        except ValueError:
-            pass
-        return entries,total_size
+    #         # Set up the ThreadPoolExecutor with the desired number of threads
+    #         with ThreadPoolExecutor(max_workers=num_threads) as pool:
+    #             futures = [pool.submit(worker, i) for i in range(num_threads)]
+                
+    #             for future in futures:
+    #                 future.result()  # This will block until each worker is done
+
+    #     entries = []
+    #     total_size = 0
+    #     try:
+    #         while not entries_queue.empty():
+    #             entry = entries_queue.get()
+    #             entries.append(entry)
+    #             total_size += entry["size"]
+    #     except ValueError:
+    #         pass
+    #     return entries,total_size
 
     def _on_device_scan(self, data):
         source = data.get("source")
         if source != self.m_config["source"]:
             return
 
-        self._scan()
-        self.emitFiles()
+        self._background_scan()
+        # self._scan()
+        # self.emitFiles()
 
 
     def _on_device_send(self, data, server):
@@ -611,11 +914,21 @@ class Device:
                                 if response.status_code != 200:
                                     print("Error uploading file:", response.text)
 
-            pool = eventlet.GreenPool(num_threads)
-            for i in range(num_threads):
-                pool.spawn(worker, i)
+            # Set up the ThreadPoolExecutor with the desired number of threads
+            with ThreadPoolExecutor(max_workers=num_threads) as pool:
+                # Submit the worker tasks to the thread pool
+                futures = [pool.submit(worker, i) for i in range(num_threads)]
+                
+                # Wait for all threads to finish
+                for future in futures:
+                    future.result()  # This will block until each worker is done
 
-            pool.waitall()
+
+            # pool = eventlet.GreenPool(num_threads)
+            # for i in range(num_threads):
+            #     pool.spawn(worker, i)
+
+            # pool.waitall()
 
         if self.m_signal.get(server, "") == "cancel":
             self.emitFiles()
@@ -659,8 +972,10 @@ class Device:
                 # os.rename(md5, bak)
 
 
-        self._scan()
-        self.emitFiles()
+        self._background_scan()
+        # self._scan()
+        # self.emitFiles()
+
 
     def emitFiles(self, sio=None):
         '''
@@ -668,18 +983,36 @@ class Device:
 
         Breaks up the list into bite sized chunks. 
         '''
-        if self.m_files is None:
-            self._scan()
-        # debug_print(files)
-        if len(self.m_files) == 0:
-            debug_print("No files to send")
-            return None
+
+        self._update_fs_info()
 
         robot_name = self.m_config.get("robot_name", None)
         project = self.m_config.get("project")
         if project is not None and len(project) < 1:
             project = None 
         source = self.m_config["source"]
+
+
+        if self.m_files is None:
+            data = {
+                "robot_name": robot_name,
+                "project": project,
+                "source": source,
+                "fs_info": self.m_fs_info,
+                "total": 0
+                }
+            
+            # TODO: do a quick scan first, then do a longer scan
+            # need to figure out a way to only do the longer scan once!
+            # self._scan(do_md5=False)
+            debug_print("Files is empty")
+            return None
+
+        # debug_print(files)
+        if len(self.m_files) == 0:
+            debug_print("No files to send")
+            return None
+
 
         # debug_print(f"project name is: {project}")
         data = {
@@ -693,7 +1026,7 @@ class Device:
         # debug_print(f"sending {len(self.m_files)}")
 
         if project and len(project) > 1:
-            N = 20
+            N = 100
             packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
             for pack in packs:
                 msg = {
@@ -705,7 +1038,12 @@ class Device:
                     sio.emit("device_files_items", msg)
                 else:
                     self._emit_to_all_servers("device_files_items", msg)
-            eventlet.sleep(0.1)
+            # eventlet.sleep(0.1)
+            time.sleep(0.1)
+
+        # eventlet.sleep(1)
+        time.sleep(1)
+
         try:
             if sio:
                 sio.emit("device_files", data)
@@ -773,11 +1111,12 @@ class Device:
 
 
         if rescan:
-            self._scan()
+            # self._scan()
+            self._background_scan()
 
-        # emit the files if the project name has changed!
-        if changed:
-            self.emitFiles()
+        # # emit the files if the project name has changed!
+        # if changed:
+        #     self.emitFiles()
 
         self.update_connections()
 
@@ -790,7 +1129,9 @@ class Device:
     def start_server_thread(self, server_address):
         # Initialize the "can run" flag and spawn a thread for the server
         self.server_can_run[server_address] = True
-        thread = eventlet.spawn(self.manage_connection, server_address)
+        # thread = eventlet.spawn(self.manage_connection, server_address)
+        thread = Thread(target=self.manage_connection, args=(server_address,))
+        thread.start()
         self.server_threads[server_address] = thread
 
     def stop_server_thread(self, server_address):
@@ -798,8 +1139,8 @@ class Device:
         if server_address in self.server_can_run:
             self.server_can_run[server_address] = False
             thread = self.server_threads.pop(server_address, None)
-            if thread:
-                thread.kill()  # Kill the thread if necessary
+            # if thread:
+            #     thread.kill()  # Kill the thread if necessary
 
         with self.session_lock:
             del self.server_can_run[server_address]
@@ -850,7 +1191,8 @@ class Device:
                 self.test_connection(server_address)
             except Exception as e:
                 debug_print(f"Error with server {server_address}: {e}")
-                eventlet.sleep(self.m_config["wait_s"])  
+                # eventlet.sleep(self.m_config["wait_s"])  
+                time.sleep(self.m_config["wait_s"])
 
     def test_connection(self, server_address):
         sio = self._create_client()
@@ -882,7 +1224,13 @@ class Device:
 
         @sio.event
         def dashboard_info(data):
-            eventlet.spawn( self.emitFiles, sio)
+            debug_print("yo")
+            # eventlet.spawn( self.emitFiles, sio)
+            # self._scan(emit=True)
+            self._background_scan()
+
+            debug_print("yip")
+            pass 
 
         api_key_token = self.m_config["API_KEY_TOKEN"]
         headers = {"X-Api-Key": api_key_token }
@@ -907,7 +1255,8 @@ class Device:
 
         while self.server_can_run.get(server_address, False):
             ts = self.m_config.get("wait_s", 5)
-            eventlet.sleep(ts)
+            # eventlet.sleep(ts)
+            time.sleep(ts)
         
         try:
             sio.disconnect()
@@ -933,7 +1282,8 @@ class Device:
             for i in range(total_size):
                 main_pbar.update()
                 self.m_local_dashboard_sio.emit("ping", "msg")
-                eventlet.sleep(1)
+                #eventlet.sleep(1)
+                time.sleep(1)
 
 
         pass 

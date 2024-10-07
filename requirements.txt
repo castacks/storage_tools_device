@@ -13,3 +13,4 @@ zeroconf
 requests
 psutil
 eventlet
+xxhash

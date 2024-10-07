@@ -1,3 +1,4 @@
+window.allProgressBars = {};
 
 function updateProgress(msg, container) {
     let source = msg.source;
@@ -54,7 +55,7 @@ function updateProgress(msg, container) {
       }
       statusHeader.innerHTML = line;
     } else {
-      console.log("Did not find [" + container  +"-header")
+      console.log("Did not find " + container  +"-header")
     }
   
   

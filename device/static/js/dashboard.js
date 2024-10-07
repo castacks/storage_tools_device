@@ -250,6 +250,9 @@ function refresh() {
     fetch("refresh")
 }
 
-window.allProgressBars = {};
+function restartConnections() {
+    fetch("restartConnections")
+}
+
 
 window.serverStatus = {}

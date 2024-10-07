@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-import eventlet 
-eventlet.monkey_patch()
-
-
 import threading
+# import eventlet 
+# eventlet.monkey_patch()
+
+
 from flask import Flask, request 
 from flask_socketio import SocketIO
 import os 
@@ -14,7 +14,7 @@ from Device import Device
 
 
 app = Flask(__name__)
-sockethost = SocketIO(app, async_mode="eventlet")
+sockethost = SocketIO(app, async_mode="threading")
 
 
 
@@ -35,19 +35,13 @@ if __name__ == "__main__":
 
     device = Device(args.config, sockethost, args.salt)
 
-    def run_device():
-        # Use a synchronous method compatible with Eventlet for running the device
-        device.run()
-
-    # Start the device's run method as an Eventlet-compatible background task
-    sockethost.start_background_task(run_device)
-
+    sockethost.start_background_task(device.run)
     app.route("/")(device.index)
     app.route("/get_config", methods=["GET"])(device.get_config)
     app.route("/save_config", methods=["POST"])(device.save_config)
-    # app.route("/disconnect", methods=["GET"])(device.do_disconnect)
     app.route("/debug", methods=["GET"])(device.debug_socket)
     app.route("/refresh", methods=["GET"])(device.on_refresh)
+    app.route("/restartConnections", methods=["GET"])(device.on_restart_connections)
 
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)

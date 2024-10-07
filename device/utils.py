@@ -1,8 +1,12 @@
+import queue
 import re
+import time
+import eventlet
 import mcap
 import mcap.exceptions
 from mcap.reader import make_reader
 from datetime import datetime, timezone
+
 
 from rosbags.highlevel import AnyReader
 import exifread 
@@ -14,49 +18,144 @@ from datetime import datetime, timedelta,timezone
 
 from SocketIOTQDM import MultiTargetSocketIOTQDM
 from debug_print import debug_print
+import concurrent.futures
+import threading
 
 import psutil
 import hashlib
 import json
 import os
+import xxhash
+from queue import Queue
 
 
-def compute_md5(file_path, chunk_size=8192, position=None, socket_events=None, source=None, main_pbar=None):
-    md5 = hashlib.md5()
-    try:
-        pbar = None
+# def compute_md5_worker(args):
+#     file_path, messages, chunk_size = args
+#     # debug_print(file_path)
+#     x = xxhash.xxh128()
 
-        cache_name = file_path + ".md5"
-        if os.path.exists(cache_name) and os.path.getmtime(cache_name) > os.path.getmtime(file_path):
-            rtn = json.load(open(cache_name))
-            if main_pbar: main_pbar.update(os.path.getsize(file_path))
-            return rtn
+#     cache_name = file_path + ".md5"
+#     if os.path.exists(cache_name) and os.path.getmtime(cache_name) > os.path.getmtime(file_path):
+#         rtn = json.load(open(cache_name))
+#         messages.put({"main_pbar": os.path.getsize(file_path)})
+#         return file_path, rtn
 
-        with open(file_path, 'rb') as f:
-            if position:
-                size = os.path.getsize(file_path)
-                pbar = MultiTargetSocketIOTQDM(total=size, unit="B", unit_scale=True, leave=False, position=position, delay=1, desc=os.path.basename(file_path), source=source,socket_events=socket_events)
+#     with open(file_path, 'rb') as f:
+#         size = os.path.getsize(file_path)
+#         desc = os.path.basename(file_path)
+#         messages.put({"child_pbar": file_path, "desc": desc, "size": size, "action": "start"})
 
-            while chunk := f.read(chunk_size):
-                md5.update(chunk)
-                if pbar: pbar.update(len(chunk))
-                if main_pbar: main_pbar.update(len(chunk))
+#         while chunk := f.read(chunk_size):
+#             x.update(chunk)
+#             update = len(chunk)
+#             messages.put({"main_pbar": update})
+#             messages.put({"child_pbar": file_path, "size": update, "action": "update"})
 
-            if pbar: pbar.close()
-    except FileNotFoundError:
-        return None  # Handle file not found if needed
+#         messages.put({"child_pbar": file_path, "action": "close"})
 
-    rtn = md5.hexdigest()
-    try:
-        json.dump(rtn, open(cache_name, "w"))
-        os.chmod(cache_name, 0o777 )
+#     rtn = x.hexdigest()
+#     try:
+#         json.dump(rtn, open(cache_name, "w"))
+#         os.chmod(cache_name, 0o777 )
 
-    except PermissionError as e:
-        debug_print(f"Failed to write [{cache_name}]. Permission Denied")
-    except Exception as e:
-        debug_print(f"Error writing [{cache_name}]: {e}")
+#     except PermissionError as e:
+#         debug_print(f"Failed to write [{cache_name}]. Permission Denied")
+#     except Exception as e:
+#         debug_print(f"Error writing [{cache_name}]: {e}")
+    
+#     return file_path, rtn
 
-    return rtn
+class PosMaker:
+    def __init__(self, max_pos) -> None:
+        self.m_pos = {i: False for i in range(max_pos)}
+        self.m_max = max_pos
+    
+    def get_next_pos(self) -> int:
+        for i in sorted(self.m_pos):
+            if not self.m_pos[i]:
+                self.m_pos[i] = True 
+                return i
+            
+        # just in case things get messed up, always return a valid position
+        i = self.m_max 
+        self.m_max += 1
+        self.m_pos[i] = True
+        return i 
+    
+    def release_pos(self, i):
+        self.m_pos[i] = False
+
+def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_threads):
+    pos_maker = PosMaker(max_threads)
+
+    positions = {}
+
+    pbars = {}
+    pbars["main_pbar"] = MultiTargetSocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=0, delay=1, desc=desc, source=source,socket_events=socket_events)
+
+    while True:
+        try:
+            action_msg = messages.get(block=False)
+
+        except queue.Empty:
+            time.sleep(0.05)
+            continue
+        except ValueError:
+            time.sleep(0.05)
+            continue
+        
+        if "close" in action_msg:
+            debug_print("close")
+            break
+
+        if "main_pbar" in action_msg:
+            pbars["main_pbar"].update(action_msg["main_pbar"])
+            continue
+
+        if "child_pbar" in action_msg:
+            name = action_msg["child_pbar"]
+            action = action_msg["action"] 
+            if action == "start":
+                desc = action_msg["desc"]
+                position = pos_maker.get_next_pos()
+                positions[name] = position
+                size = action_msg["size"]
+                if position in pbars:
+                    pbars[position].close()
+                    del pbars[position]
+                pbars[position] = MultiTargetSocketIOTQDM(total=size, unit="B", unit_scale=True, leave=False, position=position+1, delay=1, desc=desc, source=source,socket_events=socket_events)
+                continue
+            if action == "update":                
+                position = positions.get(name, None)
+                if position == None:
+                    debug_print(f"Do not have pbar for {name}")
+                    continue
+                size = action_msg["size"]
+                if position in pbars:
+                    # debug_print(f"{position} : {size}")
+                    pbars[position].update(size)
+                else:
+                    debug_print(f"do not have pbar for {position}")
+                continue
+            if action == "close":
+                position = positions.get(name, None)
+                if position == None:
+                    continue
+
+                if position in pbars:
+                    pbars[position].close()
+                    del pbars[position]
+                pos_maker.release_pos(position)
+
+                del positions[name]
+                continue
+            continue 
+
+
+    positions = sorted(pbars)
+    for position in positions:
+        pbars[position].close()
+
 
 
 def get_source_by_mac_address(robot_name):

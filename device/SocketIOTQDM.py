@@ -168,6 +168,8 @@ class MultiTargetSocketIOTQDM(tqdm):
         self.last_emit_time = time.time()
         super().__init__(*args, **kwargs)
 
+        # debug_print(self.sio_events)
+
         for (sio, event, room) in self.sio_events:
             msg = {
                 "source": self.source,
