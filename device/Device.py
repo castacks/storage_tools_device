@@ -176,9 +176,16 @@ class Device:
             server = self.m_config["zero_conf"][0]
             self.start_server_thread(server)
 
+    def run_async_task(self, zeroconf, service_type, name):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self._resolve_service_info(zeroconf, service_type, name))
+        loop.close()
+
     def on_change(self, zeroconf: AsyncZeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
         if state_change is ServiceStateChange.Added:
-            self.m_local_dashboard_sio.start_background_task(asyncio.ensure_future, self._resolve_service_info(zeroconf, service_type, name))
+            # self.m_local_dashboard_sio.start_background_task(asyncio.ensure_future, self._resolve_service_info(zeroconf, service_type, name))
+            self.m_local_dashboard_sio.start_background_task(self.run_async_task, zeroconf, service_type, name)
 
 
     def _on_disconnect(self):
@@ -468,6 +475,9 @@ class Device:
 
     def _background_hash(self):
         if self.m_hash_thread is not None:
+            return 
+        
+        if self.m_files is None:
             return 
         
         self.m_hash_thread = True 

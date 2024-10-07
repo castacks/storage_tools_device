@@ -105,7 +105,7 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
             continue
         
         if "close" in action_msg:
-            debug_print("close")
+            # debug_print("close")
             break
 
         if "main_pbar" in action_msg:
