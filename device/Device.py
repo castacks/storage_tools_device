@@ -297,6 +297,7 @@ class Device:
 
     def _background_reindex(self):
         if self.m_reindex_thread is not None:
+            debug_print("already reindexing")
             return 
         
         # placeholder to keep the other threads out
@@ -374,7 +375,9 @@ class Device:
         pass 
 
     def _background_metadata(self):
+        debug_print("enter")
         if self.m_metadata_thread is not None:
+            debug_print("already doing metadata scan")
             return 
         self.m_metadata_thread = True 
 
@@ -495,10 +498,13 @@ class Device:
         self._background_hash()
 
     def _background_hash(self):
+        debug_print("enter")
         if self.m_hash_thread is not None:
+            debug_print("Already doing hash creation")
             return 
         
         if self.m_files is None:
+            debug_print("No files")
             return 
         
         self.m_hash_thread = True 
