@@ -1062,7 +1062,6 @@ class Device:
                 self.server_sio[server_address] = sio
 
             sio.emit('join', { 'room': self.m_config["source"], "type": "device" })                               
-            self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
 
 
         @sio.event
@@ -1082,6 +1081,8 @@ class Device:
 
         @sio.event
         def dashboard_info(data):
+            self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
+            debug_print("scan")
             self._background_scan()
             pass 
 
