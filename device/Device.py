@@ -431,6 +431,9 @@ class Device:
                     device_entry = json.load(open(metadata_filename, "r"))
                     if device_entry["site"] == None:
                         device_entry["site"] = "default"
+                    if "filename" not in device_entry:
+                        device_entry["filename"] = filename 
+                        device_entry["dirroot"] = dirroot
 
                 else:
                     metadata = getMetaData(fullpath, self.m_local_tz)
@@ -529,7 +532,7 @@ class Device:
                     continue
 
                 if "filename" not in entry:
-                    return entry 
+                    continue
 
                 filename = os.path.join(entry["dirroot"], entry["filename"])
                 if os.path.exists(filename):
