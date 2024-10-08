@@ -879,7 +879,7 @@ class Device:
             "total": len(self.m_files)
             }
 
-        # debug_print(f"sending {len(self.m_files)}")
+        debug_print(f"sending {len(self.m_files)}")
 
         if project and len(project) > 1:
             N = 100
