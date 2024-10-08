@@ -1095,6 +1095,10 @@ class Device:
             self._background_scan()
             pass 
 
+        @sio.event
+        def control_msg(data):
+            self._on_control_msg(data, server_address)
+        
         api_key_token = self.m_config["API_KEY_TOKEN"]
         headers = {"X-Api-Key": api_key_token }
 
