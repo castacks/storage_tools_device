@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib
+import socket 
 
 import xxhash
 from SocketIOTQDM import SocketIOTQDM, MultiTargetSocketIOTQDM
@@ -102,6 +103,7 @@ class Device:
         self.server_can_run = {}  # Stores the "can run" flag for each server
         self.server_sessions = {}  # Stores session ID for each server
         self.server_sio = {} # maps server to socket. 
+        self.server_should_run = {} # controls the busy loop during a session. Set to false for an address to reconnect. 
 
         # list of connected servers
         self.m_connected_servers = []
@@ -147,10 +149,16 @@ class Device:
 
 
     def on_restart_connections(self):
+        debug_print("Restart connections")
         # self.server_sio[server_address] = sio
-        with self.session_lock:
-            for sio in self.server_sio.values():
-                sio.disconnect()
+        for server_name in self.server_should_run:
+            self.server_should_run[server_name] = False 
+
+        time.sleep(1 + float(self.m_config["wait_s"]))
+
+        for server_name in self.server_should_run:
+            self.server_should_run[server_name] = True 
+
             
         return "ok", 200
 
@@ -161,6 +169,12 @@ class Device:
             addresses = [
                 f"{addr}:{cast(int, info.port)}" for addr in info.parsed_scoped_addresses()
             ]
+            properties = {k.decode('utf-8'): v.decode('utf-8') if isinstance(v, bytes) else v for k, v in info.properties.items()}
+
+            source = properties.get("source", None)
+            if source is None: 
+                return
+            debug_print( f"source is: {source}")
 
         for address in addresses:
             if address in self.m_config["servers"]:
@@ -581,189 +595,6 @@ class Device:
                     self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
 
 
-    # def _scan(self, emit=True):
-    #     debug_print("Scanning for files")
-    #     self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": "Scanning for files", "room": self.m_config["source"]})
-
-    #     self.m_fs_info = {}
-    #     entries = []
-    #     total_size = 0
-    #     for dirroot in self.m_config["watch"]:
-    #         debug_print("Scanning " + dirroot)
-
-    #         self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "msg": f"Scanning {dirroot} for files", "room": self.m_config["source"]})
-
-    #         if os.path.exists(dirroot):
-    #             dev = os.stat(dirroot).st_dev
-    #             if not dev in self.m_fs_info:
-    #                 total, used, free = shutil.disk_usage(dirroot)
-    #                 free_percentage = (free / total) * 100
-    #                 self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
-
-    #         filenames = []
-    #         for root, _, files in os.walk(dirroot):
-    #             for file in files:
-    #                 if not self._include(file):
-    #                     continue
-    #                 filename = os.path.join(root, file).replace(dirroot, "")
-    #                 filename = filename.strip("/")
-    #                 fullpath = os.path.join(root, file)
-    #                 filenames.append((dirroot, filename, fullpath))
-
-    #     entries, total_size = self._get_metadata(filenames)
-
-    #     debug_print(f"entries: {len(entries)}")
-    #     self.m_files = entries
-
-    #     # if self.m_scan_thread is None:
-    #     #     self.m_scan_thread =  eventlet.spawn(self._do_md5sum, entries)
-
-
-    #     # rtn = self._do_md5sum(entries, total_size, do_md5=do_md5)
-
-    #     debug_print("scan complete")
-        
-    #     if emit:
-    #         self.emitFiles()
-    #     return entries
-
-    # def _do_md5sum(self, entries):
-    #     debug_print("hash hash")
-
-    #     event = "device_status_tqdm"
-    #     socket_events = [(self.m_local_dashboard_sio, event, None)]
-    #     for sio in self.server_sio.values():
-    #         if sio and sio.connected:
-    #             socket_events.append((sio, event, None))
-
-
-    #     event_mapping = {}
-    #     file_list = []
-    #     for entry in entries:
-    #         fullpath = os.path.join(entry["dirroot"], entry["filename"])
-    #         event_mapping[fullpath] = entry
-    #         file_list.append(fullpath)
-
-    #     num_threads = min(self.m_config["threads"], len(entries))
-
-    #     rtn = []
-    #     file_hash = multithread_md5(file_list, socket_events=socket_events, source=self.m_config["source"], chunk_size=self.m_chunk_size, max_threads=num_threads)
-    #     for entry in entries:
-    #         fullpath = os.path.join(entry["dirroot"], entry["filename"])
-    #         if fullpath in file_hash:
-    #             entry["md5"] = file_hash[fullpath]
-    #         rtn.append(entry)
-
-    #     self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})
-
-    #     self.m_files = rtn
-
-    #     self.emitFiles()
-    #     self.m_scan_thread = None 
-
-    #     return rtn
-
-    # def _get_metadata(self, filenames):
-
-    #     event = "device_status_tqdm"
-
-    #     socket_events = [(self.m_local_dashboard_sio, event, None)]
-    #     for sio in self.server_sio.values():
-    #         if sio and sio.connected:
-    #             socket_events.append((sio, event, None))
-
-
-    #     with MultiTargetSocketIOTQDM(total=len(filenames), desc="Generating Metadata", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
-    #         file_queue = queue.Queue()
-    #         entries_queue = queue.Queue()
-
-    #         robot_name = self.m_config.get("robot_name", None)
-
-    #         for item in filenames:
-    #             file_queue.put(item)
-
-    #         def worker(position:int):
-    #             while True:
-    #                 try:
-    #                     dirroot, filename, fullpath = file_queue.get(block=False)
-    #                 except queue.Empty:
-    #                     break
-    #                 except ValueError:
-    #                     break
-
-    #                 if not os.path.exists(fullpath):
-    #                     continue
-
-    #                 metadata_filename = fullpath + ".metadata"
-    #                 if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
-    #                     device_entry = json.load(open(metadata_filename, "r"))
-
-    #                 else:
-    #                     size = os.path.getsize(fullpath)
-    #                     metadata = getMetaData(fullpath, self.m_local_tz)
-    #                     # eventlet.sleep(0)
-    #                     if metadata is None:
-    #                         # invalid file! silently ignore invalid files! 
-    #                         continue
-
-    #                     formatted_date = getDateFromFilename(fullpath)
-    #                     if formatted_date is None:
-    #                         creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
-    #                         formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
-    #                     start_time = metadata.get("start_time", formatted_date)
-    #                     end_time = metadata.get("end_time", formatted_date)
-
-    #                     device_entry = {
-    #                         "dirroot": dirroot,
-    #                         "filename": filename,
-    #                         "size": size,
-    #                         "start_time": start_time,
-    #                         "end_time": end_time,
-    #                         "site": None,
-    #                         "robot_name": robot_name,
-    #                         "md5": None
-    #                     }
-    #                     device_entry.update(metadata)
-
-    #                 if filename in self.m_updates:
-    #                     device_entry.update( self.m_updates[filename])
-
-    #                 entries_queue.put(device_entry)
-
-    #                 try:
-    #                     with open(metadata_filename, "w") as fid:
-    #                         json.dump(device_entry, fid, indent=True)
-    #                     os.chmod(metadata_filename, 0o777)
-                        
-    #                 except PermissionError as e:
-    #                     debug_print(f"Failed to write [{metadata_filename}]. Permission Denied")
-    #                 except Exception as e:
-    #                     debug_print(f"Error writing [{metadata_filename}]: {e}")
-
-    #                 main_pbar.update()
-
-
-    #         num_threads = min(self.m_config["threads"], len(filenames))
-
-
-    #         # Set up the ThreadPoolExecutor with the desired number of threads
-    #         with ThreadPoolExecutor(max_workers=num_threads) as pool:
-    #             futures = [pool.submit(worker, i) for i in range(num_threads)]
-                
-    #             for future in futures:
-    #                 future.result()  # This will block until each worker is done
-
-    #     entries = []
-    #     total_size = 0
-    #     try:
-    #         while not entries_queue.empty():
-    #             entry = entries_queue.get()
-    #             entries.append(entry)
-    #             total_size += entry["size"]
-    #     except ValueError:
-    #         pass
-    #     return entries,total_size
-
     def _on_device_scan(self, data):
         source = data.get("source")
         if source != self.m_config["source"]:
@@ -1139,6 +970,7 @@ class Device:
     def start_server_thread(self, server_address):
         # Initialize the "can run" flag and spawn a thread for the server
         self.server_can_run[server_address] = True
+        self.server_should_run[server_address] = True
         # thread = eventlet.spawn(self.manage_connection, server_address)
         thread = Thread(target=self.manage_connection, args=(server_address,))
         thread.start()
@@ -1154,7 +986,8 @@ class Device:
 
         with self.session_lock:
             del self.server_can_run[server_address]
-            
+            del self.server_should_run[server_address]
+
             if server_address in self.server_sio:
                 del self.server_sio[server_address]
 
@@ -1188,10 +1021,10 @@ class Device:
         except socket.gaierror as e:
             pass 
 
-        if ip_address and f"{ip_address}:{port}" in self.m_config.get("zero_config", []):
-            self.server_can_run[server_address] = False
+        # if ip_address and f"{ip_address}:{port}" in self.m_config.get("zero_config", []):
+        #     self.server_can_run[server_address] = False
 
-        debug_print("-")
+        # debug_print("-")
         
 
         while self.server_can_run.get(server_address, False):
@@ -1234,20 +1067,19 @@ class Device:
 
         @sio.event
         def dashboard_info(data):
-            # debug_print("yo")
-            # eventlet.spawn( self.emitFiles, sio)
-            # self._scan(emit=True)
             self._background_scan()
-
-            # debug_print("yip")
             pass 
 
         api_key_token = self.m_config["API_KEY_TOKEN"]
         headers = {"X-Api-Key": api_key_token }
 
         try:
-            sio.connect(f"http://{server_address}/socket.io", headers=headers, transports=['websocket'])
 
+            debug_print(f"Testing to {server_address}")
+            server, port = server_address.split(":")
+            socket.create_connection((server, port))
+
+            sio.connect(f"http://{server_address}/socket.io", headers=headers, transports=['websocket'])
             debug_print(f"Connected to {server_address}")
     
             sio.on('control_msg')(self._on_control_msg)
@@ -1263,7 +1095,7 @@ class Device:
             debug_print(f"Failed to connect to {server_address} because {e}")
             sio.disconnect()
 
-        while self.server_can_run.get(server_address, False):
+        while self.server_can_run.get(server_address, False) and self.server_should_run.get(server_address, False):
             ts = self.m_config.get("wait_s", 5)
             # eventlet.sleep(ts)
             time.sleep(ts)
