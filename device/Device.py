@@ -426,6 +426,8 @@ class Device:
                 metadata_filename = fullpath + ".metadata"
                 if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
                     device_entry = json.load(open(metadata_filename, "r"))
+                    if device_entry["site"] == None:
+                        device_entry["site"] = "default"
 
                 else:
                     metadata = getMetaData(fullpath, self.m_local_tz)
@@ -448,7 +450,7 @@ class Device:
                         "size": size,
                         "start_time": start_time,
                         "end_time": end_time,
-                        "site": None,
+                        "site": "default",
                         "robot_name": robot_name,
                         "md5": None
                     }
