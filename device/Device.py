@@ -176,6 +176,8 @@ class Device:
                 return
             debug_print( f"source is: {source}")
 
+        self.m_config["zero_conf"] = []
+
         for address in addresses:
             if address in self.m_config["servers"]:
                 continue
@@ -191,13 +193,16 @@ class Device:
             self.start_server_thread(server)
 
     def run_async_task(self, zeroconf, service_type, name):
+        debug_print("enter")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(self._resolve_service_info(zeroconf, service_type, name))
         loop.close()
+        debug_print("exit")
 
     def on_change(self, zeroconf: AsyncZeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
-        if state_change is ServiceStateChange.Added:
+        debug_print(state_change)
+        if state_change is ServiceStateChange.Added or state_change is ServiceStateChange.Updated:
             # self.m_local_dashboard_sio.start_background_task(asyncio.ensure_future, self._resolve_service_info(zeroconf, service_type, name))
             self.m_local_dashboard_sio.start_background_task(self.run_async_task, zeroconf, service_type, name)
 
