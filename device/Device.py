@@ -521,6 +521,10 @@ class Device:
             for entry in entries:
                 if not entry:
                     continue
+
+                if "filename" not in entry:
+                    return entry 
+
                 filename = os.path.join(entry["dirroot"], entry["filename"])
                 if os.path.exists(filename):
                     total_size += os.path.getsize(filename)
