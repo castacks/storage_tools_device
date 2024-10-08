@@ -86,6 +86,6 @@ def recover_mcap(filename: str) -> Tuple[bool, str]:
         return True, "ok"
     
     # if not all good, let the user know what happened. 
-    msg = " ".join(p.stdout.decode("utf-8")) + " " + " ".join(p.stderr.decode("utf-8"))
+    msg = f"file: {filename}, " + p.stdout.decode("utf-8") + " " p.stderr.decode("utf-8")
     return False, msg 
 

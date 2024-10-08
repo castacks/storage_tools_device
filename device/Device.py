@@ -528,6 +528,10 @@ class Device:
 
             def hash_worker(args):
                 message_queue, entry, chunk_size = args 
+
+                if "filename" not in entry:
+                    return entry 
+                
                 filename = os.path.join(entry["dirroot"], entry["filename"])
                 if not os.path.exists(filename):
                     return None 
