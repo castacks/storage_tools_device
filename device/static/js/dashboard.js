@@ -168,6 +168,7 @@ $(document).ready(function () {
     socket.on("title", function(title) {
         const div = document.getElementById("title")
         div.innerHTML = title;
+        document.title = "Dev Config " + title 
     })
 
     socket.on('device_status_tqdm', function (msg) {
