@@ -701,16 +701,16 @@ class Device:
                 desc = "Sending " + os.path.basename(relative_path)
                 message_queue.put({"child_pbar": name, "desc": desc, "size": file_size, "action": "start"})
 
-                with requests.Session() as session:
-                    for cid in range(1+splits):
-                        params["offset"] = offset_b
-                        params["cid"] = cid
-                        # debug_print(offset_b)
-                        # Make the POST request with the streaming data
-                        response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
-                        if response.status_code != 200:
-                            debug_print(f"Error! {response.status_code} {response.content.decode()}")
-                            break 
+                # with requests.Session() as session:
+                for cid in range(1+splits):
+                    params["offset"] = offset_b
+                    params["cid"] = cid
+                    # Make the POST request with the streaming data
+                    response = requests.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
+                    # response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
+                    if response.status_code != 200:
+                        debug_print(f"Error! {response.status_code} {response.content.decode()}")
+                        break 
 
                     message_queue.put({"child_pbar": name, "action": "close"})
 
