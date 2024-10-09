@@ -69,7 +69,7 @@ function refreshConfig() {
             document.getElementById("threads").value = config.threads || 4;
             document.getElementById("wait_s").value = config.wait_s || 2;
             document.getElementById("split_size_gb").value = config.split_size_gb || 2;
-            document.getElementById("read_size_gb").value = config.read_size_gb || 2;
+            document.getElementById("read_size_mb").value = config.read_size_mb || 2;
 
             // Populate list fields
             configFields.forEach(field => {
