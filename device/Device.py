@@ -647,9 +647,9 @@ class Device:
 
 
         def send_worker(args):
-            message_queue, dirroot, relative_path, upload_id, offset_b, file_size = args 
+            message_queue, dirroot, relative_path, upload_id, offset_b, file_size, idx = args 
 
-            name = upload_id + "_" + relative_path 
+            name = f"{upload_id}_{idx}_{os.path.basename(relative_path)}" 
             fullpath = os.path.join(dirroot, relative_path)
 
             if self.m_signal.get(server, "") == "cancel":
@@ -686,7 +686,7 @@ class Device:
                         # Update the progress bars
                         chunck_size = len(chunk)
                         message_queue.put({"main_pbar": chunck_size})
-                        message_queue.put({"child_pbar": name, "size": chunck_size, "action": "update"})
+                        message_queue.put({"child_pbar": name, "size": chunck_size, "action": "update", "total_size": file_size, "desc": desc})
 
                         if self.m_signal.get(server, None):
                             if self.m_signal.get(server, "") == "cancel":
@@ -712,11 +712,11 @@ class Device:
                         debug_print(f"Error! {response.status_code} {response.content.decode()}")
                         break 
 
-                    message_queue.put({"child_pbar": name, "action": "close"})
+                message_queue.put({"child_pbar": name, "action": "close"})
 
                 return fullpath, True 
 
-        pool_queue = [ (message_queue, dirroot, relative_path, upload_id, offset_b, file_size) for dirroot, relative_path, upload_id, offset_b, file_size in filelist ]
+        pool_queue = [ (message_queue, dirroot, relative_path, upload_id, offset_b, file_size, idx) for idx, (dirroot, relative_path, upload_id, offset_b, file_size) in enumerate(filelist) ]
 
         thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
         thread.start()
@@ -785,7 +785,7 @@ class Device:
         self._removeFiles(files)
 
     def isConnected(self, server):
-        connected = server in self.server_sio and self.server_sio[server].connected        
+        connected = server in self.server_sio and self.server_can_run[server] and self.server_sio[server].connected        
         return connected
 
     def _sendFiles(self, server:str, filelist:list):

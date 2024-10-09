@@ -60,13 +60,13 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
 
     while True:
         try:
-            action_msg = messages.get(block=False)
+            action_msg = messages.get(block=True)
 
         except queue.Empty:
-            time.sleep(0.05)
+            time.sleep(0.001)
             continue
         except ValueError:
-            time.sleep(0.05)
+            time.sleep(0.001)
             continue
         
         if "close" in action_msg:
@@ -88,12 +88,16 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
                 if position in pbars:
                     pbars[position].close()
                     del pbars[position]
+                # debug_print(f"creating {name}")
                 pbars[position] = MultiTargetSocketIOTQDM(total=size, unit="B", unit_scale=True, leave=False, position=position+1, delay=1, desc=desc, source=source,socket_events=socket_events)
                 continue
-            if action == "update":                
+            if action == "update":     
+                # debug_print(f"updating {name}")           
                 position = positions.get(name, None)
                 if position == None:
                     debug_print(f"Do not have pbar for {name}")
+                    for pname in positions:
+                        debug_print(f"{pname} {positions[pname]}")
                     continue
                 size = action_msg["size"]
                 if position in pbars:
@@ -112,6 +116,7 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
                     del pbars[position]
                 pos_maker.release_pos(position)
 
+                # debug_print(f"removing {name}")
                 del positions[name]
                 continue
             continue 
