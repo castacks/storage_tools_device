@@ -1118,14 +1118,11 @@ class Device:
             sio.connect(f"http://{server_address}/socket.io", headers=headers, transports=['websocket'])
             debug_print(f"Connected to {server_address}")
     
-            sio.on('control_msg')(self._on_control_msg)
+            # sio.on('control_msg')(self._on_control_msg)
             sio.on('update_entry')(self._on_update_entry)
             sio.on('set_project')(self._on_set_project)
-            # self.m_sio.on('set_md5')(self._on_set_md5)
             sio.on("device_scan")(self._on_device_scan)
-            # self.m_sio.on("device_send")(self._on_device_send)
             sio.on("device_remove")(self.on_device_remove)
-            # self.m_sio.on("keep_alive_ack")(self._on_keep_alive_ack)
 
         except socketio.exceptions.ConnectionError as e:
             debug_print(f"Failed to connect to {server_address} because {e}")
