@@ -721,7 +721,7 @@ class Device:
                         except queue.Empty:
                             break
 
-                        if self.m_signal == "cancel":
+                        if self.m_signal.get(server, "") == "cancel":
                             break
 
                         fullpath = os.path.join(dirroot, file)
@@ -764,8 +764,8 @@ class Device:
                                         pbar.update(chunck_size)
                                         main_pbar.update(chunck_size)
 
-                                        if self.m_signal:
-                                            if self.m_signal == "cancel":
+                                        if self.m_signal.get(server, None):
+                                            if self.m_signal.get(server, "") == "cancel":
                                                 break
 
                                         offset_b += chunck_size
@@ -795,15 +795,8 @@ class Device:
                 for future in futures:
                     future.result()  # This will block until each worker is done
 
-
-            # pool = eventlet.GreenPool(num_threads)
-            # for i in range(num_threads):
-            #     pool.spawn(worker, i)
-
-            # pool.waitall()
-
-        if self.m_signal.get(server, "") == "cancel":
-            self.emitFiles()
+        # if self.m_signal.get(server, "") == "cancel":
+        #     self.emitFiles()
 
         self.m_signal[server] = None
 
