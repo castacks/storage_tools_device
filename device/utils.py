@@ -29,41 +29,6 @@ import xxhash
 from queue import Queue
 
 
-# def compute_md5_worker(args):
-#     file_path, messages, chunk_size = args
-#     # debug_print(file_path)
-#     x = xxhash.xxh128()
-
-#     cache_name = file_path + ".md5"
-#     if os.path.exists(cache_name) and os.path.getmtime(cache_name) > os.path.getmtime(file_path):
-#         rtn = json.load(open(cache_name))
-#         messages.put({"main_pbar": os.path.getsize(file_path)})
-#         return file_path, rtn
-
-#     with open(file_path, 'rb') as f:
-#         size = os.path.getsize(file_path)
-#         desc = os.path.basename(file_path)
-#         messages.put({"child_pbar": file_path, "desc": desc, "size": size, "action": "start"})
-
-#         while chunk := f.read(chunk_size):
-#             x.update(chunk)
-#             update = len(chunk)
-#             messages.put({"main_pbar": update})
-#             messages.put({"child_pbar": file_path, "size": update, "action": "update"})
-
-#         messages.put({"child_pbar": file_path, "action": "close"})
-
-#     rtn = x.hexdigest()
-#     try:
-#         json.dump(rtn, open(cache_name, "w"))
-#         os.chmod(cache_name, 0o777 )
-
-#     except PermissionError as e:
-#         debug_print(f"Failed to write [{cache_name}]. Permission Denied")
-#     except Exception as e:
-#         debug_print(f"Error writing [{cache_name}]: {e}")
-    
-#     return file_path, rtn
 
 class PosMaker:
     def __init__(self, max_pos) -> None:
