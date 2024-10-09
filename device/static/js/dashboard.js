@@ -68,6 +68,8 @@ function refreshConfig() {
             document.getElementById("local_tz").value = config.local_tz || "";
             document.getElementById("threads").value = config.threads || 4;
             document.getElementById("wait_s").value = config.wait_s || 2;
+            document.getElementById("split_size_gb").value = config.split_size_gb || 2;
+            document.getElementById("read_size_gb").value = config.read_size_gb || 2;
 
             // Populate list fields
             configFields.forEach(field => {
@@ -167,15 +169,6 @@ $(document).ready(function () {
         const div = document.getElementById("title")
         div.innerHTML = title;
     })
-    // socket.on("server_disconnect", function() {
-    //     let serverStatusDiv = document.getElementById('server_connection_status');
-    //     serverStatusDiv.className = "connection_status_offline";
-    //     serverStatusDiv.textContent = "Server: Disconnected";
-
-    //     let nameInput = document.getElementById("connection_server_name")
-    //     nameInput.value = ""
-
-    // });
 
     socket.on('device_status_tqdm', function (msg) {
         //console.log(msg)

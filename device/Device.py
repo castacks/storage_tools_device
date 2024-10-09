@@ -672,9 +672,13 @@ class Device:
         source = self.m_config["source"]
         api_key_token = self.m_config["API_KEY_TOKEN"]
 
-        split_size_gb = self.m_config.get("split_size_gb", 1)
+        split_size_gb = int(self.m_config.get("split_size_gb", 1))
 
-        debug_print(filelist)
+        chunk_size_mb = int(self.m_config.get("chunk_size_mb", 1))
+
+        read_size_b = chunk_size_mb * 1024 * 1024
+
+        # debug_print(filelist)
 
         total_size = 0
         file_queue = queue.Queue()
@@ -747,7 +751,7 @@ class Device:
 
                                     read_count = 0
                                     while parent.isConnected(server):
-                                        chunk = file.read(1024*1024)
+                                        chunk = file.read(read_size_b)
                                         if not chunk:
                                             break
                                         yield chunk
@@ -1147,7 +1151,6 @@ class Device:
         event = "device_status_tqdm"
         socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
 
-        # with SocketIOTQDM(total=total_size, desc="Compute MD5 sum", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as main_pbar:
         total_size = 15
         with MultiTargetSocketIOTQDM(total=total_size, desc="Debug socket", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
             for i in range(total_size):
