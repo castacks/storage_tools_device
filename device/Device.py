@@ -645,63 +645,63 @@ class Device:
         message_queue = queue.Queue()
         desc = "File Transfer"
 
-        with requests.Session() as session:
 
-            def send_worker(args):
-                message_queue, dirroot, relative_path, upload_id, offset_b, file_size = args 
+        def send_worker(args):
+            message_queue, dirroot, relative_path, upload_id, offset_b, file_size = args 
 
-                name = upload_id + "_" + relative_path 
-                fullpath = os.path.join(dirroot, relative_path)
+            name = upload_id + "_" + relative_path 
+            fullpath = os.path.join(dirroot, relative_path)
 
-                if self.m_signal.get(server, "") == "cancel":
-                    return fullpath, False
-                
-                if not os.path.exists(fullpath):
-                    return fullpath, False  
-                
-                with open(fullpath, 'rb') as file:
-                    params = {}
-                    if offset_b > 0:
-                        file.seek(offset_b)
-                        params["offset"] = offset_b
-                        file_size -= offset_b
+            if self.m_signal.get(server, "") == "cancel":
+                return fullpath, False
+            
+            if not os.path.exists(fullpath):
+                return fullpath, False  
+            
+            with open(fullpath, 'rb') as file:
+                params = {}
+                if offset_b > 0:
+                    file.seek(offset_b)
+                    params["offset"] = offset_b
+                    file_size -= offset_b
 
-                    split_size_b = 1024*1024*1024*split_size_gb
-                    splits = file_size // split_size_b
+                split_size_b = 1024*1024*1024*split_size_gb
+                splits = file_size // split_size_b
 
-                    params["splits"] = splits
+                params["splits"] = splits
 
-                    headers = {
-                        'Content-Type': 'application/octet-stream',
-                        "X-Api-Key": api_key_token
-                        }
+                headers = {
+                    'Content-Type': 'application/octet-stream',
+                    "X-Api-Key": api_key_token
+                    }
 
-                    def read_and_update(offset_b:int, parent:Device):
-                        read_count = 0
-                        while parent.isConnected(server) and self.m_signal.get(server, "") != "cancel":
-                            chunk = file.read(read_size_b)
-                            if not chunk:
-                                break
-                            yield chunk
+                def read_and_update(offset_b:int, parent:Device):
+                    read_count = 0
+                    while parent.isConnected(server) and self.m_signal.get(server, "") != "cancel":
+                        chunk = file.read(read_size_b)
+                        if not chunk:
+                            break
+                        yield chunk
 
-                            # Update the progress bars
-                            chunck_size = len(chunk)
-                            message_queue.put({"main_pbar": chunck_size})
-                            message_queue.put({"child_pbar": name, "size": chunck_size, "action": "update"})
+                        # Update the progress bars
+                        chunck_size = len(chunk)
+                        message_queue.put({"main_pbar": chunck_size})
+                        message_queue.put({"child_pbar": name, "size": chunck_size, "action": "update"})
 
-                            if self.m_signal.get(server, None):
-                                if self.m_signal.get(server, "") == "cancel":
-                                    break
-
-                            offset_b += chunck_size
-                            read_count += chunck_size
-
-                            if read_count >= split_size_b:
+                        if self.m_signal.get(server, None):
+                            if self.m_signal.get(server, "") == "cancel":
                                 break
 
-                    desc = "Sending " + os.path.basename(relative_path)
-                    message_queue.put({"child_pbar": name, "desc": desc, "size": file_size, "action": "start"})
+                        offset_b += chunck_size
+                        read_count += chunck_size
 
+                        if read_count >= split_size_b:
+                            break
+
+                desc = "Sending " + os.path.basename(relative_path)
+                message_queue.put({"child_pbar": name, "desc": desc, "size": file_size, "action": "start"})
+
+                with requests.Session() as session:
                     for cid in range(1+splits):
                         params["offset"] = offset_b
                         params["cid"] = cid
@@ -714,23 +714,23 @@ class Device:
 
                     message_queue.put({"child_pbar": name, "action": "close"})
 
-                    return fullpath, True 
+                return fullpath, True 
 
-            pool_queue = [ (message_queue, dirroot, relative_path, upload_id, offset_b, file_size) for dirroot, relative_path, upload_id, offset_b, file_size in filelist ]
+        pool_queue = [ (message_queue, dirroot, relative_path, upload_id, offset_b, file_size) for dirroot, relative_path, upload_id, offset_b, file_size in filelist ]
 
-            thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
-            thread.start()
+        thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
+        thread.start()
 
-            files = []
+        files = []
 
-            try:
-                with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                    results = {}
-                    for filename, status in executor.map(send_worker, pool_queue):
-                        files.append((filename, status))
+        try:
+            with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                results = {}
+                for filename, status in executor.map(send_worker, pool_queue):
+                    files.append((filename, status))
 
-            finally:
-                message_queue.put({"close": True})
+        finally:
+            message_queue.put({"close": True})
 
 
         # done 

@@ -117,7 +117,7 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
             continue 
 
 
-    positions = sorted(pbars)
+    positions = pbars.keys()
     for position in positions:
         pbars[position].close()
 
