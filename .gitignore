@@ -24,3 +24,12 @@ config/config.chiron.yaml
 config/config.zeroconf.yaml
 Dockerfile.new
 docker-compose-new.yaml
+device/static/js/scratch_multiprocessor.js
+device/static/scratch_multiprocessor.html
+device/scratch_mcap.py
+device/scratch_minimal.py
+device/scratch_multiprocess.py
+device/scratch_reindex.py
+bin/mcap-linux-amd64
+config/config.second.yaml
+device/test_utils.py

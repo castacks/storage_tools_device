@@ -488,7 +488,7 @@ class Device:
             try:
                 with ThreadPoolExecutor(max_workers=max_threads) as executor:
                     for entry in executor.map(metadata_worker, pool_queue):
-                        if entry:
+                        if entry and "start_time" in entry:
                             entries.append(entry)
 
             finally:
