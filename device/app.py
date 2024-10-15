@@ -1,41 +1,26 @@
 #!/usr/bin/env python
 
-import threading
-# import eventlet 
-# eventlet.monkey_patch()
-
-
-from flask import Flask, request 
+from flask import Flask, request
 from flask_socketio import SocketIO
-import os 
+import os
 
-from Device import Device
-
-
+try:
+    from Device import Device
+except ModuleNotFoundError:
+    from .Device import Device
 
 app = Flask(__name__)
 sockethost = SocketIO(app, async_mode="threading")
 
+# Global device instance
+device = None
 
+def create_app(config_file, salt):
+    """ Application factory for initializing the app and device. """
+    global device
+    device = Device(config_file, sockethost, salt)
 
-"""
-This class represents a device that can scan for files, send them to a server, and interact with the server.
-
-Attributes:
-    m_config (dict): The configuration of the device, loaded from a YAML file.
-"""
-if __name__ == "__main__":
-    import sys 
-    print("% " + " ".join(sys.argv))
-    from argparse import ArgumentParser
-    parser = ArgumentParser()
-    parser.add_argument("-c", "--config", type=str, required=False, default="../config/config.yaml", help="Config file for this instance")
-    parser.add_argument("-s", "--salt", type=str, required=False)
-    args = parser.parse_args()
-
-    device = Device(args.config, sockethost, args.salt)
-
-    sockethost.start_background_task(device.run)
+    # Define all routes and socket events
     app.route("/")(device.index)
     app.route("/get_config", methods=["GET"])(device.get_config)
     app.route("/save_config", methods=["POST"])(device.save_config)
@@ -46,11 +31,28 @@ if __name__ == "__main__":
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)
 
-    port = os.environ.get("CONFIG_PORT", "8811")
-    if len(port) == 0:
-        port = 8811
-    else:
-        port = int(port)
+    # Start the background task for the device
+    sockethost.start_background_task(device.run)
 
+    return app
+
+# Initialize the app only once
+if __name__ != "__main__":
+    # This branch runs when the script is imported by Gunicorn
+    config_file = os.getenv("CONFIG_FILE", "config/config.yaml")
+    salt = os.getenv("SALT")
+    create_app(config_file, salt)
+
+if __name__ == "__main__":
+    # For local debugging and development
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument("-c", "--config", type=str, required=False, default="../config/config.yaml", help="Config file for this instance")
+    parser.add_argument("-s", "--salt", type=str, required=False)
+    args = parser.parse_args()
+
+    # Run the application using the provided configuration
+    create_app(args.config, args.salt)
+    port = os.environ.get("CONFIG_PORT", "8811")
+    port = int(port) if port else 8811
     sockethost.run(app=app, host="0.0.0.0", port=port)
-    # device.run()

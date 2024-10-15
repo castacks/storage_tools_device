@@ -3,12 +3,20 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib
 import socket 
-
 import xxhash
-from SocketIOTQDM import SocketIOTQDM, MultiTargetSocketIOTQDM
-from debug_print import debug_print
-import reindexMCAP
-from flask import request 
+
+
+try:
+    from SocketIOTQDM import  MultiTargetSocketIOTQDM
+    from debug_print import debug_print
+    import reindexMCAP
+    from utils import get_source_by_mac_address, getDateFromFilename, getMetaData, pbar_thread, address_in_list
+
+except ModuleNotFoundError:
+    from .SocketIOTQDM import  MultiTargetSocketIOTQDM
+    from .debug_print import debug_print
+    from .utils import get_source_by_mac_address, getDateFromFilename, getMetaData, pbar_thread, address_in_list
+    import device.reindexMCAP as reindexMCAP
 
 
 import pytz
@@ -17,13 +25,13 @@ import socketio
 import socketio.exceptions
 import yaml
 from flask import jsonify, send_from_directory
+from flask import request 
 from zeroconf import ServiceBrowser, ServiceStateChange
 from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
 
 from flask_socketio import SocketIO
-from eventlet import tpool
-import eventlet 
-from eventlet.lock import Semaphore as Lock
+# from eventlet.lock import Semaphore as Lock
+from threading import Lock
 
 
 import json
@@ -35,10 +43,7 @@ import sys
 from datetime import datetime
 from threading import Thread
 from typing import cast
-
-from utils import get_source_by_mac_address, getDateFromFilename, getMetaData, pbar_thread
-
-
+    
 
 
 class Device:
@@ -95,7 +100,7 @@ class Device:
         services = ['_http._tcp.local.']
         self.m_zeroconfig = AsyncZeroconf()
         self.m_zero_conf_name = "Airlab_storage._http._tcp.local."
-        self.browser = ServiceBrowser(self.m_zeroconfig.zeroconf, services, handlers=[self.on_change])
+        self.browser = ServiceBrowser(self.m_zeroconfig.zeroconf, services, handlers=[self._zero_config_on_change])
 
 
         self.session_lock = Lock()
@@ -104,6 +109,8 @@ class Device:
         self.server_sessions = {}  # Stores session ID for each server
         self.server_sio = {} # maps server to socket. 
         self.server_should_run = {} # controls the busy loop during a session. Set to false for an address to reconnect. 
+        self.source_to_server  = {} # maps source name to server address
+        self.server_to_source = {}
 
         # list of connected servers
         self.m_connected_servers = []
@@ -152,15 +159,16 @@ class Device:
     def on_restart_connections(self):
         debug_print("Restart connections")
         # self.server_sio[server_address] = sio
-        for server_name in self.server_should_run:
-            self.server_should_run[server_name] = False 
 
-        time.sleep(1 + float(self.m_config["wait_s"]))
+        self.disconnect_all()
+        time.sleep(0.5)
 
-        for server_name in self.server_should_run:
-            self.server_should_run[server_name] = True 
+        self.start_zero_config_servers()
 
-            
+        servers = self.m_config["servers"]
+        for server_address in servers:
+            if server_address not in self.server_threads:
+                self.start_server_thread(server_address, "restart_connection server threads")
         return "ok", 200
 
 
@@ -177,21 +185,32 @@ class Device:
                 return
             debug_print( f"source is: {source}")
 
+        # todo: change this to dict of array.  Also need to add a timeout and remove when too many disconnects.  
         self.m_config["zero_conf"] = []
 
         for address in addresses:
             if address in self.m_config["servers"]:
                 continue
+
+            if address_in_list(address, self.m_config["servers"]):
+                continue 
             self.m_config["zero_conf"] =self.m_config.get("zero_conf", [])
             if address in self.m_config["zero_conf"]:
                 continue
             self.m_config["zero_conf"].append(address)
             debug_print(f"added {address}")
 
-        # pick the first server
+        status = ""
+        for address in self.m_config["servers"]:
+            status += f"Server: {address}\n"
+        
+        for address in self.m_config["zero_conf"]:
+            status += f"ZeroConf: {address}\n"
+        self.m_local_dashboard_sio.emit("status", {"msg": status})
+        debug_print(status)
+
         if len(self.m_config.get("zero_conf", [])) > 0:
-            server = self.m_config["zero_conf"][0]
-            self.start_server_thread(server)
+            self.start_zero_config_servers()
 
     def run_async_task(self, zeroconf, service_type, name):
         debug_print("enter")
@@ -201,10 +220,8 @@ class Device:
         loop.close()
         debug_print("exit")
 
-    def on_change(self, zeroconf: AsyncZeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
-        debug_print(state_change)
+    def _zero_config_on_change(self, zeroconf: AsyncZeroconf, service_type: str, name: str, state_change: ServiceStateChange) -> None:
         if state_change is ServiceStateChange.Added or state_change is ServiceStateChange.Updated:
-            # self.m_local_dashboard_sio.start_background_task(asyncio.ensure_future, self._resolve_service_info(zeroconf, service_type, name))
             self.m_local_dashboard_sio.start_background_task(self.run_async_task, zeroconf, service_type, name)
 
 
@@ -788,149 +805,6 @@ class Device:
         connected = server in self.server_sio and self.server_can_run[server] and self.server_sio[server].connected        
         return connected
 
-    def _sendFiles(self, server:str, filelist:list):
-        ''' Send files to server. 
-
-            Creates up to config["threads"] workers to send files via HTTP POST to the server. 
-
-            Args:
-                server hosname:port
-                filelist list[(dirroot, relpath, upload_id, offset, size)]
-        '''
-        self.m_signal[server] = None
-
-        num_threads = min(self.m_config["threads"], len(filelist))
-        url = f"http://{server}/file"
-
-        source = self.m_config["source"]
-        api_key_token = self.m_config["API_KEY_TOKEN"]
-
-        split_size_gb = int(self.m_config.get("split_size_gb", 1))
-
-        chunk_size_mb = int(self.m_config.get("chunk_size_mb", 1))
-
-        read_size_b = chunk_size_mb * 1024 * 1024
-
-        # debug_print(filelist)
-
-        total_size = 0
-        file_queue = queue.Queue()
-        for file_pair in filelist:
-            debug_print(f"add to queue {file_pair}")
-            offset = file_pair[3]
-            size = file_pair[4]
-            try:
-                total_size += int(size) - int(offset)
-            except ValueError as e:
-                debug_print(file_pair)
-                raise e
-            file_queue.put(file_pair)
-
-        # Outer send loop progress bar. 
-
-        event = "device_status_tqdm"
-        socket_events = [(self.m_local_dashboard_sio, event, None)]
-        if server in self.server_sio:
-            socket_events.append( (self.server_sio[server], event, None) )
-
-        with MultiTargetSocketIOTQDM(total=total_size, desc="File Transfer", position=0, unit="B", unit_scale=True, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
-
-            # Worker thread. 
-            # Reads the file_queue until 
-            #    queue is empty 
-            #    the session is disconnected
-            #    the "cancel" signal is received. 
-            def worker(index:int):
-                with requests.Session() as session:
-                    
-                    while self.isConnected(server):
-                        try:
-                            dirroot, file, upload_id, offset_, total_size = file_queue.get(block=False)
-                            offset_b = int(offset_)
-                            total_size = int(total_size)
-                        except queue.Empty:
-                            break
-
-                        if self.m_signal.get(server, "") == "cancel":
-                            break
-
-                        fullpath = os.path.join(dirroot, file)
-                        if not os.path.exists(fullpath):
-                            main_pbar.update()
-                            continue
-
-                        with open(fullpath, 'rb') as file:
-                            params = {}
-                            if offset_b > 0:
-                                file.seek(offset_b)
-                                params["offset"] = offset_b
-                                total_size -= offset_b
-
-                            split_size_b = 1024*1024*1024*split_size_gb
-                            splits = total_size // split_size_b
-
-                            params["splits"] = splits
-
-                            headers = {
-                                'Content-Type': 'application/octet-stream',
-                                "X-Api-Key": api_key_token
-                                }
-
-                            # Setup the progress bar
-                            
-                            with MultiTargetSocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=1+index, source=self.m_config["source"], socket_events=socket_events) as pbar:
-                            # with SocketIOTQDM(total=total_size, unit="B", unit_scale=True, leave=False, position=1+index, source=self.m_config["source"], socket=self.m_sio, event="device_status_tqdm") as pbar:
-                                def read_and_update(offset_b, parent):
-
-                                    read_count = 0
-                                    while parent.isConnected(server):
-                                        chunk = file.read(read_size_b)
-                                        if not chunk:
-                                            break
-                                        yield chunk
-
-                                        # Update the progress bars
-                                        chunck_size = len(chunk)
-                                        pbar.update(chunck_size)
-                                        main_pbar.update(chunck_size)
-
-                                        if self.m_signal.get(server, None):
-                                            if self.m_signal.get(server, "") == "cancel":
-                                                break
-
-                                        offset_b += chunck_size
-                                        read_count += chunck_size
-
-                                        if read_count >= split_size_b:
-                                            break
-
-                                for cid in range(1+splits):
-                                    params["offset"] = offset_b
-                                    params["cid"] = cid
-                                    # debug_print(offset_b)
-                                    # Make the POST request with the streaming data
-                                    response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
-
-                                # debug_print("Complete")
-
-                                if response.status_code != 200:
-                                    print("Error uploading file:", response.text)
-
-            # Set up the ThreadPoolExecutor with the desired number of threads
-            with ThreadPoolExecutor(max_workers=num_threads) as pool:
-                # Submit the worker tasks to the thread pool
-                futures = [pool.submit(worker, i) for i in range(num_threads)]
-                
-                # Wait for all threads to finish
-                for future in futures:
-                    future.result()  # This will block until each worker is done
-
-        # if self.m_signal.get(server, "") == "cancel":
-        #     self.emitFiles()
-
-        self.m_signal[server] = None
-
-
     def _removeFiles(self, files:list):
 
         debug_print("Enter")
@@ -997,13 +871,9 @@ class Device:
                 "total": 0
                 }
             
-            # TODO: do a quick scan first, then do a longer scan
-            # need to figure out a way to only do the longer scan once!
-            # self._scan(do_md5=False)
             debug_print("Files is empty")
             return None
 
-        # debug_print(files)
         if len(self.m_files) == 0:
             debug_print("No files to send")
             return None
@@ -1071,7 +941,6 @@ class Device:
 
                     self.m_config[key] = config[key]
                 
-
             debug_print("updated config")
 
             with open(self.m_config_filename, "w") as f:
@@ -1087,12 +956,15 @@ class Device:
 
             self.disconnect_all()
 
+            self.start_zero_config_servers()
+
         # add any server that was adding by the update
         servers = self.m_config["servers"]
         for server_address in servers:
             if server_address not in self.server_threads:
-                self.start_server_thread(server_address)
+                self.start_server_thread(server_address, "save_config, server threads")
 
+        
         to_remove = []
 
         # remove any server that was deleted by the update and isn't zero conf. 
@@ -1119,38 +991,72 @@ class Device:
 
     def run(self):
         for server_address in self.m_config["servers"]:
-            self.start_server_thread(server_address)
+            self.start_server_thread(server_address, "config server list")
 
-    def start_server_thread(self, server_address):
+    def start_zero_config_servers(self):
+        server_list = self.m_config.get("zero_conf", [])
+
+        for server_address in server_list:
+            self.server_can_run[server_address] = True
+            self.server_should_run[server_address] = True
+
+        thread = Thread(target=self.manage_zero_conf_connection, args=(server_list,))
+        thread.start()
+
+
+    def start_server_thread(self, server_address, from_src):
         # Initialize the "can run" flag and spawn a thread for the server
         self.server_can_run[server_address] = True
         self.server_should_run[server_address] = True
         # thread = eventlet.spawn(self.manage_connection, server_address)
-        thread = Thread(target=self.manage_connection, args=(server_address,))
+        thread = Thread(target=self.manage_connection, args=(server_address,from_src))
         thread.start()
         self.server_threads[server_address] = thread
 
     def stop_server_thread(self, server_address):
+        debug_print(f"enter stop {server_address}")
         # Set the "can run" flag to False to stop the server's thread
         if server_address in self.server_can_run:
             self.server_can_run[server_address] = False
-            thread = self.server_threads.pop(server_address, None)
+            if server_address in self.server_threads:
+                thread = self.server_threads.pop(server_address, None)
             # if thread:
             #     thread.kill()  # Kill the thread if necessary
 
+        sio = None
         with self.session_lock:
-            del self.server_can_run[server_address]
-            del self.server_should_run[server_address]
+            if server_address in self.server_can_run:
+                del self.server_can_run[server_address]
+            if server_address in self.server_should_run:
+                del self.server_should_run[server_address]
 
             if server_address in self.server_sio:
+                sio = self.server_sio[server_address]
                 del self.server_sio[server_address]
+
+        if sio:
+            sio.emit('leave', { 'room': self.m_config["source"], "type": "device" })                               
+            sio.disconnect()
 
         self.m_local_dashboard_sio.emit("server_remove",  {"name": server_address})
 
+
+
+    def stop_zero_config_servers(self):
+        debug_print("enter")
+        for server_address in self.m_config.get("zero_conf", []):
+            debug_print("before")
+            self.stop_server_thread(server_address)
+            debug_print("after")
+
     def disconnect_all(self):
+        debug_print("enter")
         servers = sorted(self.server_threads)
         for server_address in servers:
             self.stop_server_thread(server_address)
+        self.stop_zero_config_servers()
+        debug_print("exit")
+
 
     def update_connections(self):
         connections = {}
@@ -1163,51 +1069,60 @@ class Device:
         debug_print(connections)
         self.m_local_dashboard_sio.emit("server_connections", connections)
 
-    def manage_connection(self, server_address):
+    def manage_zero_conf_connection(self, server_list):
+        can_run = True 
+        while can_run:
+            for server_address in server_list:
+                if not self.server_can_run.get(server_address, False):
+                    can_run = False
+                    break 
+                 
+            try:
+                if self.server_should_run.get(server_address, False):
+                    self.test_connection(server_address, "manage_zero_conf")
+            except Exception as e:
+                debug_print(f"Error with server {server_address}: {e}")
+                time.sleep(self.m_config["wait_s"])
+
+
+    def manage_connection(self, server_address, from_src):
         debug_print(f"Testing to {server_address}")
-
-        # check to see if this server is one of the zero conf server. 
-        # if it is, remove it from the run list.  
-        ip_address = None
-        name, port = server_address.split(":")
-        try:
-            ip_address = socket.gethostbyname(name)
-        except socket.gaierror as e:
-            pass 
-
-        # if ip_address and f"{ip_address}:{port}" in self.m_config.get("zero_config", []):
-        #     self.server_can_run[server_address] = False
-
-        # debug_print("-")
-        
 
         while self.server_can_run.get(server_address, False):
 
-
             try:
-                self.test_connection(server_address)
+                if self.server_should_run.get(server_address, False):
+                    self.test_connection(server_address, from_src)
             except Exception as e:
                 debug_print(f"Error with server {server_address}: {e}")
                 # eventlet.sleep(self.m_config["wait_s"])  
                 time.sleep(self.m_config["wait_s"])
 
-    def test_connection(self, server_address):
+    def test_connection(self, server_address, from_src):
+        debug_print(f"Testing {server_address} from {from_src}")
         sio = self._create_client()
 
         @sio.event
         def connect():
-            debug_print(f"connected {server_address}")
-            with self.session_lock:
-                self.server_sio[server_address] = sio
-
+            time.sleep(0.5)
+            debug_print(f"---- connected {server_address}")
             sio.emit('join', { 'room': self.m_config["source"], "type": "device" })                               
 
 
         @sio.event
         def disconnect():
+            debug_print(f"disconnected {server_address}")
+
             with self.session_lock:
                 self.server_sio[server_address] = None 
 
+                if server_address in self.server_to_source:
+                    source = self.server_to_source[server_address]
+                    del self.server_to_source[server_address]
+
+                    if source in self.source_to_server:
+                        del self.source_to_server[source]
+                
             self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": False})
 
         @sio.event
@@ -1220,8 +1135,18 @@ class Device:
 
         @sio.event
         def dashboard_info(data):
+            debug_print(data)
+            source = data.get("source", "None")
+            if source in self.source_to_server:
+                disconnect()
+                return 
+            
+            with self.session_lock:
+                self.server_sio[server_address] = sio
+                self.source_to_server[source] = server_address
+                self.server_to_source[server_address] = source
+
             self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
-            debug_print("scan")
             self._background_scan()
             pass 
 
@@ -1234,28 +1159,36 @@ class Device:
 
         try:
 
-            debug_print(f"Testing to {server_address}")
             server, port = server_address.split(":")
+            port = int(port)
+            debug_print(f"Testing to {server}:{port}")
             socket.create_connection((server, port))
 
-            sio.connect(f"http://{server_address}/socket.io", headers=headers, transports=['websocket'])
-            debug_print(f"Connected to {server_address}")
-    
-            # sio.on('control_msg')(self._on_control_msg)
             sio.on('update_entry')(self._on_update_entry)
             sio.on('set_project')(self._on_set_project)
             sio.on("device_scan")(self._on_device_scan)
             sio.on("device_remove")(self.on_device_remove)
 
+            # if sio.connected:
+            #     sio.disconnect()
+        
+            debug_print("Connecting....")
+            sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
+            debug_print(f"Connected to {server_address}")
+    
+            # sio.on('control_msg')(self._on_control_msg)
+
         except socketio.exceptions.ConnectionError as e:
-            debug_print(f"Failed to connect to {server_address} because {e}")
+            debug_print(f"Failed to connect to {server_address} because {e} {e.args}")
             sio.disconnect()
+            return 
 
         while self.server_can_run.get(server_address, False) and self.server_should_run.get(server_address, False):
             ts = self.m_config.get("wait_s", 5)
             # eventlet.sleep(ts)
             time.sleep(ts)
         
+        debug_print(f"lost connection to {server_address}")
         try:
             sio.disconnect()
         except Exception as e:

@@ -1,9 +1,7 @@
 from typing import Tuple
 from mcap.reader import make_reader
-import mcap.exceptions
-from debug_print import debug_print
+# from debug_print import debug_print
 import os 
-import struct 
 import subprocess
 import platform
 

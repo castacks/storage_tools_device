@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.12.7-slim
 
 RUN apt-get update -y && apt-get install -y ffmpeg curl
 
@@ -32,5 +32,10 @@ WORKDIR /app
 COPY device device
 COPY config config
 
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+
 # Run the command to start the app when the container starts
-CMD ["python", "device/app.py", "-c", "/app/config/config.yaml"]
+# CMD ["python", "device/app.py", "-c", "/app/config/config.yaml"]

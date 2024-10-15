@@ -1,7 +1,7 @@
 import queue
 import re
+import socket
 import time
-import eventlet
 import mcap
 import mcap.exceptions
 from mcap.reader import make_reader
@@ -16,19 +16,19 @@ import pytz
 from datetime import datetime, timedelta,timezone
 
 
-from SocketIOTQDM import MultiTargetSocketIOTQDM
-from debug_print import debug_print
-import concurrent.futures
-import threading
 
 import psutil
 import hashlib
-import json
 import os
-import xxhash
 from queue import Queue
 
-
+try:
+    from SocketIOTQDM import MultiTargetSocketIOTQDM
+    from debug_print import debug_print
+except ModuleNotFoundError:
+    from .SocketIOTQDM import MultiTargetSocketIOTQDM
+    from .debug_print import debug_print
+    
 
 class PosMaker:
     def __init__(self, max_pos) -> None:
@@ -358,3 +358,47 @@ def getMetaData(filename:str, local_tz:str) -> dict:
     return {}
 
 
+def get_ip_address_and_port(server_address):
+    ip_address = None
+    port = None 
+    if ":" in server_address:
+        name, port = server_address.split(":")
+    else:
+        name = server_address
+
+    try:
+        ip_address = socket.gethostbyname(name)
+    except socket.gaierror as e:
+        pass 
+
+    return ip_address, port
+
+def same_adddress(server_address_1, server_address_2):
+    ip_address_1, port_1 = get_ip_address_and_port(server_address_1)
+    ip_address_2, port_2 = get_ip_address_and_port(server_address_2)
+
+    if not ip_address_1 or not ip_address_2:
+        return False 
+    
+    if not port_1 or not port_2:
+        return False 
+    
+    if ip_address_1 != ip_address_2:
+        return False 
+    
+    return port_1 == port_2
+
+def address_in_list(query_address, server_list):
+    ip_address_1, port_1 = get_ip_address_and_port(query_address)
+    if not ip_address_1 or not port_1:
+        return False 
+    
+    found = False
+    for server_address_2 in server_list:
+        ip_address_2, port_2 = get_ip_address_and_port(server_address_2)
+        if not ip_address_2 or not port_2:
+            continue 
+        if ip_address_1 == ip_address_2 and port_1 == port_2:
+            found = True
+            break
+    return found 

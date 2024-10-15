@@ -179,6 +179,13 @@ $(document).ready(function () {
     socket.on("ping", function(msg) {
         console.log(msg);
     })
+
+    socket.on("status", function(msg) {
+        const status = document.getElementById("status")
+        if(status) {
+            status.value += msg.msg + "\n"
+        }
+    })
     
 });
 

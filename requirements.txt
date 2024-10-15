@@ -12,5 +12,8 @@ rosbags
 zeroconf
 requests
 psutil
-eventlet
+# eventlet
 xxhash
+gunicorn
+gevent
+gevent-websocket
