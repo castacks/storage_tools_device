@@ -2,7 +2,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib
-import socket 
+import socket
+import uuid 
 import xxhash
 
 
@@ -31,7 +32,7 @@ from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
 
 from flask_socketio import SocketIO
 # from eventlet.lock import Semaphore as Lock
-from threading import Lock
+from threading import Lock, get_ident, get_native_id
 
 
 import json
@@ -80,6 +81,8 @@ class Device:
 
         self.m_signal = {}
         self.m_fs_info = {}
+        self.m_send_offsets = {}
+        self.m_send_lock = {}
 
         self.m_files = None
 
@@ -631,7 +634,7 @@ class Device:
 
     def _background_send_files(self, server:str, filelist:list):
 
-        debug_print("enter")
+        # debug_print("enter")
         if self.m_send_threads.get(server, None) is not None:
             debug_print(f"Already getting file for {server}")
             return 
@@ -664,15 +667,32 @@ class Device:
 
 
         def send_worker(args):
+            # debug_print(f"Enter {get_ident()} {get_native_id()}")
+            # debug_print(args)
+
             message_queue, dirroot, relative_path, upload_id, offset_b, file_size, idx = args 
+
+            lock = server + ":" + upload_id
+            if dup_name:= self.m_send_lock.get(lock, ""):
+                debug_print(f"got duplicate: {dup_name}, I am {get_ident()} {get_native_id()}")
+                return
+
+            self.m_send_lock[lock] =  f"{get_ident()} {get_native_id()}"
 
             name = f"{upload_id}_{idx}_{os.path.basename(relative_path)}" 
             fullpath = os.path.join(dirroot, relative_path)
 
+            # debug_print(f"Sending {fullpath}")
+        
             if self.m_signal.get(server, "") == "cancel":
+                debug_print("Canceled")
+                del self.m_send_lock[lock]
+
                 return fullpath, False
             
             if not os.path.exists(fullpath):
+                del self.m_send_lock[lock]
+                debug_print(f"{fullpath} not found")
                 return fullpath, False  
             
             with open(fullpath, 'rb') as file:
@@ -681,6 +701,8 @@ class Device:
                     file.seek(offset_b)
                     params["offset"] = offset_b
                     file_size -= offset_b
+
+                self.m_send_offsets[upload_id] = offset_b
 
                 split_size_b = 1024*1024*1024*split_size_gb
                 splits = file_size // split_size_b
@@ -692,7 +714,7 @@ class Device:
                     "X-Api-Key": api_key_token
                     }
 
-                def read_and_update(offset_b:int, parent:Device):
+                def read_and_update(upload_id:str, parent:Device):
                     read_count = 0
                     while parent.isConnected(server) and self.m_signal.get(server, "") != "cancel":
                         chunk = file.read(read_size_b)
@@ -709,29 +731,40 @@ class Device:
                             if self.m_signal.get(server, "") == "cancel":
                                 break
 
-                        offset_b += chunck_size
+                        parent.m_send_offsets[upload_id] += chunck_size
                         read_count += chunck_size
 
                         if read_count >= split_size_b:
                             break
 
+                # debug_print(f"{file_size} {splits}")
                 desc = "Sending " + os.path.basename(relative_path)
                 message_queue.put({"child_pbar": name, "desc": desc, "size": file_size, "action": "start"})
 
                 # with requests.Session() as session:
                 for cid in range(1+splits):
-                    params["offset"] = offset_b
+
+                    if self.m_signal.get(server, "") == "cancel":
+                        break 
+
+                    params["offset"] = self.m_send_offsets[upload_id]
                     params["cid"] = cid
                     # Make the POST request with the streaming data
-                    response = requests.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
+                    response = requests.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(upload_id, self), headers=headers)
                     # response = session.post(url + f"/{source}/{upload_id}", params=params, data=read_and_update(offset_b, self), headers=headers)
                     if response.status_code != 200:
                         debug_print(f"Error! {response.status_code} {response.content.decode()}")
                         break 
+                    # debug_print(f"Status code {response.status_code}" )
+
+                del self.m_send_offsets[upload_id]
 
                 message_queue.put({"child_pbar": name, "action": "close"})
 
-                return fullpath, True 
+                # debug_print("File sent")
+            del self.m_send_lock[lock]
+            return fullpath, True 
+
 
         pool_queue = [ (message_queue, dirroot, relative_path, upload_id, offset_b, file_size, idx) for idx, (dirroot, relative_path, upload_id, offset_b, file_size) in enumerate(filelist) ]
 
@@ -779,6 +812,7 @@ class Device:
 
 
     def _on_device_send(self, data, server):
+        # debug_print(f"Enter {get_ident()} {get_native_id()}")
         source = data.get("source")
         if source != self.m_config["source"]:
             return
@@ -891,7 +925,7 @@ class Device:
         debug_print(f"sending {len(self.m_files)}")
 
         if project and len(project) > 1:
-            N = 100
+            N = 5
             packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
             for pack in packs:
                 msg = {
@@ -1036,6 +1070,7 @@ class Device:
 
         if sio:
             sio.emit('leave', { 'room': self.m_config["source"], "type": "device" })                               
+            debug_print("Disconnect!")
             sio.disconnect()
 
         self.m_local_dashboard_sio.emit("server_remove",  {"name": server_address})
@@ -1102,17 +1137,23 @@ class Device:
         debug_print(f"Testing {server_address} from {from_src}")
         sio = self._create_client()
 
+        session_id = str(uuid.uuid4())
+        duplicated = False
+
         @sio.event
         def connect():
             time.sleep(0.5)
             debug_print(f"---- connected {server_address}")
-            sio.emit('join', { 'room': self.m_config["source"], "type": "device" })                               
+            sio.emit('join', { 'room': self.m_config["source"], "type": "device", "session_token": session_id })                               
 
 
         @sio.event
         def disconnect():
             debug_print(f"disconnected {server_address}")
 
+            if duplicated:
+                return 
+            
             with self.session_lock:
                 self.server_sio[server_address] = None 
 
@@ -1138,7 +1179,9 @@ class Device:
             debug_print(data)
             source = data.get("source", "None")
             if source in self.source_to_server:
-                disconnect()
+                debug_print("Disconnect!")
+                duplicated = True 
+                sio.disconnect()
                 return 
             
             with self.session_lock:

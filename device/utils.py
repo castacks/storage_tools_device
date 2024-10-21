@@ -128,16 +128,31 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
 
 
 
+def is_interface_up(interface):
+    path = f"/sys/class/net/{interface}/operstate"
+    try:
+        with open(path, "r") as fid:
+            state = fid.read()
+    except NotADirectoryError:
+        state = "down"
+
+    state = state.strip()
+    return state == "up"
+
+
 def get_source_by_mac_address(robot_name):
     macs = []
     addresses = psutil.net_if_addrs()
     for interface in sorted(addresses):
         if interface == "lo":
             continue
+        if not is_interface_up(interface):
+            continue
+
         for addr in sorted(addresses[interface]):
             if addr.family == psutil.AF_LINK:  # Check if it's a MAC address
-                if psutil.net_if_stats()[interface].isup:
-                    macs.append(addr.address.replace(":",""))
+                # if psutil.net_if_stats()[interface].isup:
+                macs.append(addr.address.replace(":",""))
 
     name = hashlib.sha256("_".join(macs).encode()).hexdigest()[:8]
     rtn = f"DEV-{robot_name}-{name}"
