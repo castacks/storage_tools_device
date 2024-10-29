@@ -255,5 +255,9 @@ function restartConnections() {
     fetch("restartConnections")
 }
 
+function emitFiles()
+{
+    fetch("emitFiles")
+}
 
 window.serverStatus = {}

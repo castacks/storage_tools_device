@@ -355,6 +355,7 @@ class Device:
                         if os.path.exists(filename) and os.path.getsize(filename) > 0:
                             all_files.append(filename)
                             
+        debug_print("Scan complete")
         self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})        
 
         with MultiTargetSocketIOTQDM(total=len(all_files), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
@@ -513,7 +514,7 @@ class Device:
                 with ThreadPoolExecutor(max_workers=max_threads) as executor:
                     for entry in executor.map(metadata_worker, pool_queue):
                         if entry and "start_time" in entry:
-                            entries.append(entry)
+                            entries.append(entry.copy())
 
             finally:
                 message_queue.put({"close": True})
@@ -535,6 +536,7 @@ class Device:
             return 
         
         self.m_hash_thread = True 
+        debug_print(self.m_files[0])
         entries = self.m_files.copy()
 
         event = "device_status_tqdm"
@@ -565,13 +567,18 @@ class Device:
 
             def hash_worker(args):
                 message_queue, entry, chunk_size = args 
+                if entry is None:
+                    debug_print("empty entry")
 
                 if "filename" not in entry:
+                    debug_print("No filename")
                     return entry 
                 
                 filename = os.path.join(entry["dirroot"], entry["filename"])
                 if not os.path.exists(filename):
+                    debug_print(f"File {filename} does not exist!")
                     return None 
+                
                 size = os.path.getsize(filename)
                 cache_name = filename + ".md5"
                 if os.path.exists(cache_name) and os.path.getmtime(cache_name) > os.path.getmtime(filename):
@@ -616,14 +623,16 @@ class Device:
                 with ThreadPoolExecutor(max_workers=max_threads) as executor:
                     results = {}
                     for entry in executor.map(hash_worker, pool_queue):
-                        entries.append(entry)
+                        if entry:
+                            entries.append(entry)
 
             finally:
                 message_queue.put({"close": True})
-
+        
         self.m_files = entries
         self.m_hash_thread = None
 
+        debug_print(len(self.m_files))
         self.emitFiles()
 
     def _background_scan(self):
@@ -880,12 +889,10 @@ class Device:
         # self.emitFiles()
 
 
-    def emitFiles(self, sio=None):
-        '''
-        Send the list of files to the server. 
+    def send_device_data(self):    
 
-        Breaks up the list into bite sized chunks. 
-        '''
+        N = 25
+        blocks = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
 
         self._update_fs_info()
 
@@ -895,61 +902,107 @@ class Device:
             project = None 
         source = self.m_config["source"]
 
-
-        if self.m_files is None:
-            data = {
-                "robot_name": robot_name,
-                "project": project,
-                "source": source,
-                "fs_info": self.m_fs_info,
-                "total": 0
-                }
-            
-            debug_print("Files is empty")
-            return None
-
-        if len(self.m_files) == 0:
-            debug_print("No files to send")
-            return None
-
-
-        # debug_print(f"project name is: {project}")
-        data = {
-            "robot_name": robot_name,
-            "project": project,
+        device_data = {
             "source": source,
-            "fs_info": self.m_fs_info,
-            "total": len(self.m_files)
+            "project": project,
+            "robot_name": robot_name,
+            "total": len(blocks),
+            "fs_info": self.m_fs_info
+        }
+        self._emit_to_all_servers("device_data", device_data)
+
+        blocks_count = len(blocks)
+        for i, block in enumerate(blocks):
+            msg = {
+                "source": self.m_config["source"],
+                "room": self.m_config["source"],
+                "total": blocks_count,
+                "block": block,
+                "id": i
             }
 
-        debug_print(f"sending {len(self.m_files)}")
+            self._emit_to_all_servers("device_data_block", msg)
+            time.sleep(0.01)
 
-        if project and len(project) > 1:
-            N = 5
-            packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
-            for pack in packs:
-                msg = {
-                    "source": source,
-                    "files": pack,
-                    "room": self.m_config["source"]
-                }
-                if sio:
-                    sio.emit("device_files_items", msg)
-                else:
-                    self._emit_to_all_servers("device_files_items", msg)
-            # eventlet.sleep(0.1)
-            time.sleep(0.1)
 
-        # eventlet.sleep(1)
-        time.sleep(1)
 
-        try:
-            if sio:
-                sio.emit("device_files", data)
-            else:
-                self._emit_to_all_servers("device_files", data)
-        except socketio.exceptions.BadNamespaceError:
-            pass 
+    def emitFiles(self, sio=None):
+        '''
+        Send the list of files to the server. 
+
+        Breaks up the list into bite sized chunks. 
+        '''
+
+        self.m_local_dashboard_sio.start_background_task(target=self.send_device_data)
+
+        return "Ok"
+
+        # self._update_fs_info()
+
+        # robot_name = self.m_config.get("robot_name", None)
+        # project = self.m_config.get("project")
+        # if project is not None and len(project) < 1:
+        #     project = None 
+        # source = self.m_config["source"]
+
+
+        # if self.m_files is None:
+        #     data = {
+        #         "robot_name": robot_name,
+        #         "project": project,
+        #         "source": source,
+        #         "fs_info": self.m_fs_info,
+        #         "total": 0
+        #         }
+            
+        #     debug_print("Files is empty")
+        #     return None
+
+        # if len(self.m_files) == 0:
+        #     debug_print("No files to send")
+        #     return None
+
+
+        # # debug_print(f"project name is: {project}")
+        # data = {
+        #     "robot_name": robot_name,
+        #     "project": project,
+        #     "source": source,
+        #     "fs_info": self.m_fs_info,
+        #     "total": len(self.m_files)
+        #     }
+
+        # debug_print(f"sending {len(self.m_files)}")
+
+        # if project and len(project) > 1:
+        #     N = 25
+        #     packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
+        #     for pack in packs:
+        #         # debug_print(pack[0])
+        #         msg = {
+        #             "source": source,
+        #             "files": pack,
+        #             "room": self.m_config["source"]
+        #         }
+        #         if sio:
+        #             sio.emit("device_files_items", msg)
+        #         else:
+        #             self._emit_to_all_servers("device_files_items", msg)
+        #     # eventlet.sleep(0.1)
+        #     time.sleep(0.1)
+
+        # # eventlet.sleep(1)
+        # time.sleep(1)
+
+        # debug_print("sending device files")
+        # try:
+        #     if sio:
+        #         sio.emit("device_files", data)
+        #     else:
+        #         self._emit_to_all_servers("device_files", data)
+        # except socketio.exceptions.BadNamespaceError:
+        #     pass 
+        # debug_print("done")
 
     def index(self):
         return send_from_directory("static", "index.html")
@@ -1112,12 +1165,12 @@ class Device:
                     can_run = False
                     break 
                  
-            try:
-                if self.server_should_run.get(server_address, False):
-                    self.test_connection(server_address, "manage_zero_conf")
-            except Exception as e:
-                debug_print(f"Error with server {server_address}: {e}")
-                time.sleep(self.m_config["wait_s"])
+                try:
+                    if self.server_should_run.get(server_address, False):
+                        self.test_connection(server_address, "manage_zero_conf")
+                except Exception as e:
+                    debug_print(f"Error with server {server_address}: {e}")
+                    time.sleep(self.m_config["wait_s"])
 
 
     def manage_connection(self, server_address, from_src):

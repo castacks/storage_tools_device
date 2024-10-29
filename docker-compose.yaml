@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile
       args:
         CONFIG_PORT: ${CONFIG_PORT}
+      network: host 
     image: storage_tools_device
     container_name: storage_tools_device
     network_mode: host

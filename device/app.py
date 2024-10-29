@@ -27,6 +27,7 @@ def create_app(config_file, salt):
     app.route("/debug", methods=["GET"])(device.debug_socket)
     app.route("/refresh", methods=["GET"])(device.on_refresh)
     app.route("/restartConnections", methods=["GET"])(device.on_restart_connections)
+    app.route("/emitFiles", methods=["GET"])(device.emitFiles)
 
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)
