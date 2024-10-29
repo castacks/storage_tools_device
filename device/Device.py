@@ -1,5 +1,5 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import urllib
 import socket
@@ -32,7 +32,7 @@ from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
 
 from flask_socketio import SocketIO
 # from eventlet.lock import Semaphore as Lock
-from threading import Lock, get_ident, get_native_id
+from threading import Lock, get_ident, get_native_id, Event
 
 
 import json
@@ -232,6 +232,10 @@ class Device:
         debug_print(f"Got disconnected")
         self.m_local_dashboard_sio.emit("server_disconnect")
 
+    def _on_device_candel_transfer(self, data, server_address):
+        debug_print((data, server_address))
+        if server_address in self.m_signal:
+            self.m_signal[server_address].set()
 
     def _on_keep_alive_ack(self):
         pass
@@ -239,7 +243,12 @@ class Device:
     def _on_control_msg(self, data, server_address):
         debug_print(data)
         if data.get("action", "") == "cancel":
-            self.m_signal[server_address] = "cancel"
+            # self.m_signal[server_address] = "cancel"
+            if server_address in self.m_signal:   
+                self.m_signal[server_address].set()
+            else:
+                self.m_signal[server_address] = Event()
+                self.m_signal[server_address].set()
 
     def _on_update_entry(self, data):
         source = data.get("source")
@@ -459,6 +468,7 @@ class Device:
                     if "filename" not in device_entry:
                         device_entry["filename"] = filename 
                         device_entry["dirroot"] = dirroot
+                    device_entry["robot_name"] = robot_name
 
                 else:
                     metadata = getMetaData(fullpath, self.m_local_tz)
@@ -536,7 +546,7 @@ class Device:
             return 
         
         self.m_hash_thread = True 
-        debug_print(self.m_files[0])
+        # debug_print(self.m_files[0])
         entries = self.m_files.copy()
 
         event = "device_status_tqdm"
@@ -648,7 +658,7 @@ class Device:
             debug_print(f"Already getting file for {server}")
             return 
 
-        self.m_signal[server] = True
+        self.m_signal[server] = Event()
 
         url = f"http://{server}/file"
 
@@ -679,6 +689,10 @@ class Device:
             # debug_print(f"Enter {get_ident()} {get_native_id()}")
             # debug_print(args)
 
+            if self.m_signal[server].is_set():
+                # debug_print("Cancel")
+                return fullpath, False 
+            
             message_queue, dirroot, relative_path, upload_id, offset_b, file_size, idx = args 
 
             lock = server + ":" + upload_id
@@ -693,11 +707,11 @@ class Device:
 
             # debug_print(f"Sending {fullpath}")
         
-            if self.m_signal.get(server, "") == "cancel":
-                debug_print("Canceled")
-                del self.m_send_lock[lock]
+            # if self.m_signal.get(server, "") == "cancel":
+            #     debug_print("Canceled")
+            #     del self.m_send_lock[lock]
 
-                return fullpath, False
+            #     return fullpath, False
             
             if not os.path.exists(fullpath):
                 del self.m_send_lock[lock]
@@ -725,7 +739,7 @@ class Device:
 
                 def read_and_update(upload_id:str, parent:Device):
                     read_count = 0
-                    while parent.isConnected(server) and self.m_signal.get(server, "") != "cancel":
+                    while parent.isConnected(server) and not self.m_signal[server].is_set():
                         chunk = file.read(read_size_b)
                         if not chunk:
                             break
@@ -736,9 +750,9 @@ class Device:
                         message_queue.put({"main_pbar": chunck_size})
                         message_queue.put({"child_pbar": name, "size": chunck_size, "action": "update", "total_size": file_size, "desc": desc})
 
-                        if self.m_signal.get(server, None):
-                            if self.m_signal.get(server, "") == "cancel":
-                                break
+                        # if self.m_signal.get(server, None):
+                        #     if self.m_signal.get(server, "") == "cancel":
+                        #         break
 
                         parent.m_send_offsets[upload_id] += chunck_size
                         read_count += chunck_size
@@ -753,8 +767,10 @@ class Device:
                 # with requests.Session() as session:
                 for cid in range(1+splits):
 
-                    if self.m_signal.get(server, "") == "cancel":
+                    if self.m_signal[server].is_set():
                         break 
+                    # if self.m_signal.get(server, "") == "cancel":
+                    #     break 
 
                     params["offset"] = self.m_send_offsets[upload_id]
                     params["cid"] = cid
@@ -784,9 +800,25 @@ class Device:
 
         try:
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                results = {}
-                for filename, status in executor.map(send_worker, pool_queue):
-                    files.append((filename, status))
+            #     results = {}
+            #     for filename, status in executor.map(send_worker, pool_queue):
+            #         files.append((filename, status))
+
+                future_to_filename = {executor.submit(send_worker, filename): filename for filename in pool_queue}
+                
+                # Process results as they complete, allowing early exit
+                for future in as_completed(future_to_filename):
+                    filename = future_to_filename[future]
+                    try:
+                        result = future.result()
+                        files.append(result)
+                    except Exception as e:
+                        debug_print(f"Caught err with {filename}: {e}")
+                    
+                    # Check if early termination is triggered
+                    if self.m_signal[server].is_set():
+                        debug_print("Canceled")
+                        break
 
         finally:
             message_queue.put({"close": True})
@@ -794,6 +826,12 @@ class Device:
 
         # done 
         self.m_send_threads[server] = None 
+
+        self.m_signal[server].clear()
+
+        sio = self.server_sio.get(server)
+        if sio and sio.connected:
+            sio.emit("estimate_runs", {"source": self.m_config["source"]})
 
         pass 
 
@@ -891,7 +929,7 @@ class Device:
 
     def send_device_data(self):    
 
-        N = 25
+        N = 100
         blocks = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
 
         self._update_fs_info()
@@ -1250,6 +1288,26 @@ class Device:
         def control_msg(data):
             self._on_control_msg(data, server_address)
         
+        @sio.event
+        def device_cancel_transfer(data):
+            self._on_device_candel_transfer(data, server_address)
+
+        @sio.event
+        def update_entry(data):
+            self._on_update_entry(data)
+
+        @sio.event
+        def set_project(data):
+            self._on_set_project(data)
+
+        @sio.event
+        def device_scan(data):
+            self._on_device_scan(data)
+
+        @sio.event
+        def device_remove(data):
+            self.on_device_remove(data)
+
         api_key_token = self.m_config["API_KEY_TOKEN"]
         headers = {"X-Api-Key": api_key_token }
 
@@ -1260,10 +1318,10 @@ class Device:
             debug_print(f"Testing to {server}:{port}")
             socket.create_connection((server, port))
 
-            sio.on('update_entry')(self._on_update_entry)
-            sio.on('set_project')(self._on_set_project)
-            sio.on("device_scan")(self._on_device_scan)
-            sio.on("device_remove")(self.on_device_remove)
+            # sio.on('update_entry')(self._on_update_entry)
+            # sio.on('set_project')(self._on_set_project)
+            # sio.on("device_scan")(self._on_device_scan)
+            # sio.on("device_remove")(self.on_device_remove)
 
             # if sio.connected:
             #     sio.disconnect()
