@@ -1205,7 +1205,10 @@ class Device:
                  
                 try:
                     if self.server_should_run.get(server_address, False):
-                        self.test_connection(server_address, "manage_zero_conf")
+                       none_dup =  self.test_connection(server_address, "manage_zero_conf")
+                       if not none_dup:
+                           # this is a duplicate address!  
+                           self.server_can_run[server_address] = False
                 except Exception as e:
                     debug_print(f"Error with server {server_address}: {e}")
                     time.sleep(self.m_config["wait_s"])
@@ -1268,17 +1271,6 @@ class Device:
         @sio.event
         def dashboard_info(data):
             debug_print(data)
-            source = data.get("source", "None")
-            if source in self.source_to_server:
-                debug_print("Disconnect!")
-                duplicated = True 
-                sio.disconnect()
-                return 
-            
-            with self.session_lock:
-                self.server_sio[server_address] = sio
-                self.source_to_server[source] = server_address
-                self.server_to_source[server_address] = source
 
             self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
             self._background_scan()
@@ -1318,6 +1310,10 @@ class Device:
             debug_print(f"Testing to {server}:{port}")
             socket.create_connection((server, port))
 
+            reponse = requests.get(f"http://{server}:{port}/name", headers=headers)
+            msg = reponse.json()
+            source = msg.get("source")
+
             # sio.on('update_entry')(self._on_update_entry)
             # sio.on('set_project')(self._on_set_project)
             # sio.on("device_scan")(self._on_device_scan)
@@ -1325,17 +1321,26 @@ class Device:
 
             # if sio.connected:
             #     sio.disconnect()
-        
-            debug_print("Connecting....")
-            sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
-            debug_print(f"Connected to {server_address}")
-    
+
+            with self.session_lock:
+                if source and source in self.source_to_server:
+                    duplicated = True
+                    return False 
+
+                debug_print("Connecting....")
+                sio.connect(f"http://{server}:{port}/socket.io", headers=headers, transports=['websocket'])
+                debug_print(f"Connected to {server_address}")
+
+                self.server_sio[server_address] = sio
+                self.source_to_server[source] = server_address
+                self.server_to_source[server_address] = source
+
             # sio.on('control_msg')(self._on_control_msg)
 
         except socketio.exceptions.ConnectionError as e:
             debug_print(f"Failed to connect to {server_address} because {e} {e.args}")
             sio.disconnect()
-            return 
+            return True
 
         while self.server_can_run.get(server_address, False) and self.server_should_run.get(server_address, False):
             ts = self.m_config.get("wait_s", 5)
@@ -1348,6 +1353,7 @@ class Device:
         except Exception as e:
             debug_print(f"Caught {e.what()} when trying to disconnect")
 
+        return True
 
     def debug_socket(self):
         debug_print("start\n\nstart")
