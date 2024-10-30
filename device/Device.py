@@ -117,7 +117,6 @@ class Device:
 
         # list of connected servers
         self.m_connected_servers = []
-        self.m_address_to_source = {}
 
         # thread to do scaning.  
         self.m_scan_thread = None 
@@ -144,9 +143,6 @@ class Device:
 
         self.update_connections()
         self.m_local_dashboard_sio.emit("title", self.m_config["source"])
-        # for server_name, sio in self.server_sio.items():
-        #     connected = sio and sio.connected
-        #     self.m_local_dashboard_sio.emit("server_connect", {"name": server_name, "connected": connected})
 
 
     def on_local_dashboard_disconnect(self):
@@ -164,14 +160,16 @@ class Device:
         # self.server_sio[server_address] = sio
 
         self.disconnect_all()
+        
         time.sleep(0.5)
-
-        self.start_zero_config_servers()
 
         servers = self.m_config["servers"]
         for server_address in servers:
             if server_address not in self.server_threads:
                 self.start_server_thread(server_address, "restart_connection server threads")
+
+        self.start_zero_config_servers()
+
         return "ok", 200
 
 
@@ -975,73 +973,6 @@ class Device:
 
         return "Ok"
 
-        # self._update_fs_info()
-
-        # robot_name = self.m_config.get("robot_name", None)
-        # project = self.m_config.get("project")
-        # if project is not None and len(project) < 1:
-        #     project = None 
-        # source = self.m_config["source"]
-
-
-        # if self.m_files is None:
-        #     data = {
-        #         "robot_name": robot_name,
-        #         "project": project,
-        #         "source": source,
-        #         "fs_info": self.m_fs_info,
-        #         "total": 0
-        #         }
-            
-        #     debug_print("Files is empty")
-        #     return None
-
-        # if len(self.m_files) == 0:
-        #     debug_print("No files to send")
-        #     return None
-
-
-        # # debug_print(f"project name is: {project}")
-        # data = {
-        #     "robot_name": robot_name,
-        #     "project": project,
-        #     "source": source,
-        #     "fs_info": self.m_fs_info,
-        #     "total": len(self.m_files)
-        #     }
-
-        # debug_print(f"sending {len(self.m_files)}")
-
-        # if project and len(project) > 1:
-        #     N = 25
-        #     packs = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
-        #     for pack in packs:
-        #         # debug_print(pack[0])
-        #         msg = {
-        #             "source": source,
-        #             "files": pack,
-        #             "room": self.m_config["source"]
-        #         }
-        #         if sio:
-        #             sio.emit("device_files_items", msg)
-        #         else:
-        #             self._emit_to_all_servers("device_files_items", msg)
-        #     # eventlet.sleep(0.1)
-        #     time.sleep(0.1)
-
-        # # eventlet.sleep(1)
-        # time.sleep(1)
-
-        # debug_print("sending device files")
-        # try:
-        #     if sio:
-        #         sio.emit("device_files", data)
-        #     else:
-        #         self._emit_to_all_servers("device_files", data)
-        # except socketio.exceptions.BadNamespaceError:
-        #     pass 
-        # debug_print("done")
-
     def index(self):
         return send_from_directory("static", "index.html")
 
@@ -1110,13 +1041,15 @@ class Device:
         # if changed:
         #     self.emitFiles()
 
-        self.update_connections()
+        # self.update_connections()
 
         return "Saved", 200
 
     def run(self):
         for server_address in self.m_config["servers"]:
             self.start_server_thread(server_address, "config server list")
+
+        self.m_local_dashboard_sio.start_background_task(self.update_connections_thread)
 
     def start_zero_config_servers(self):
         server_list = self.m_config.get("zero_conf", [])
@@ -1181,8 +1114,14 @@ class Device:
         for server_address in servers:
             self.stop_server_thread(server_address)
         self.stop_zero_config_servers()
+        self.source_to_server.clear()
+        self.server_to_source.clear()
         debug_print("exit")
 
+    def update_connections_thread(self):
+        while True:
+            self.update_connections()
+            time.sleep(5)
 
     def update_connections(self):
         connections = {}
@@ -1190,9 +1129,9 @@ class Device:
             if  not self.server_can_run[server_address]:
                 continue 
             sio = self.server_sio.get(server_address, None)
-            connections[server_address] = sio and sio.connected
+            source = self.server_to_source.get(server_address, "None")
+            connections[server_address] = (sio and sio.connected, source)
 
-        debug_print(connections)
         self.m_local_dashboard_sio.emit("server_connections", connections)
 
     def manage_zero_conf_connection(self, server_list):
@@ -1246,6 +1185,7 @@ class Device:
             debug_print(f"disconnected {server_address}")
 
             if duplicated:
+                debug_print("Duplication disconnected")
                 return 
             
             with self.session_lock:
@@ -1272,7 +1212,8 @@ class Device:
         def dashboard_info(data):
             debug_print(data)
 
-            self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True})
+            source = self.server_to_source.get(server_address)
+            self.m_local_dashboard_sio.emit("server_connect",  {"name": server_address, "connected": True, "source": source})
             self._background_scan()
             pass 
 
@@ -1323,7 +1264,10 @@ class Device:
             #     sio.disconnect()
 
             with self.session_lock:
-                if source and source in self.source_to_server:
+                if source and source in self.source_to_server and self.source_to_server[source] != server_address:
+                    debug_print(f"Duplication! {source}, have:{self.source_to_server[source]}, testing:{server_address}")
+                    self.server_can_run[server_address] = False
+                    self.server_should_run[server_address] = False
                     duplicated = True
                     return False 
 

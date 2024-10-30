@@ -199,7 +199,8 @@ function updateConnections() {
 
     connections.forEach( element  => {
         let connection_name = element[0];
-        let connected = element[1];
+        let connected = element[1][0];
+        let source = element[1][1];
 
         let id = "status_" + connection_name.replaceAll(".", "_").replaceAll(":", "_")
         status_item = document.getElementById(id)
@@ -218,7 +219,7 @@ function updateConnections() {
         if(connected) {
             span.className = "connection_list_online"
             icon.className = "bi bi-cloud-fill"
-            span.innerHTML = connection_name + " Connected"
+            span.innerHTML = connection_name + " " + source + " Connected"
 
             any_connected = true;
         } else {

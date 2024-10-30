@@ -48,7 +48,7 @@ if __name__ == "__main__":
     # For local debugging and development
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument("-c", "--config", type=str, required=False, default="../config/config.yaml", help="Config file for this instance")
+    parser.add_argument("-c", "--config", type=str, required=False, default="config/config.yaml", help="Config file for this instance")
     parser.add_argument("-s", "--salt", type=str, required=False)
     args = parser.parse_args()
 
