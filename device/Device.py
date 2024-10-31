@@ -1140,6 +1140,7 @@ class Device:
             for server_address in server_list:
                 if not self.server_can_run.get(server_address, False):
                     can_run = False
+                    time.sleep(self.m_config["wait_s"])
                     break 
                  
                 try:
@@ -1150,20 +1151,22 @@ class Device:
                            self.server_can_run[server_address] = False
                 except Exception as e:
                     debug_print(f"Error with server {server_address}: {e}")
-                    time.sleep(self.m_config["wait_s"])
+                
+                time.sleep(self.m_config["wait_s"])
+            time.sleep(self.m_config["wait_s"])
 
 
     def manage_connection(self, server_address, from_src):
         debug_print(f"Testing to {server_address}")
 
         while self.server_can_run.get(server_address, False):
-
             try:
                 if self.server_should_run.get(server_address, False):
                     self.test_connection(server_address, from_src)
             except Exception as e:
                 debug_print(f"Error with server {server_address}: {e}")
                 # eventlet.sleep(self.m_config["wait_s"])  
+            finally:
                 time.sleep(self.m_config["wait_s"])
 
     def test_connection(self, server_address, from_src):
