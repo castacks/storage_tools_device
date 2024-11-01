@@ -4,10 +4,8 @@ from flask import Flask, request
 from flask_socketio import SocketIO
 import os
 
-try:
-    from Device import Device
-except ModuleNotFoundError:
-    from .Device import Device
+from device.Device import Device
+
 
 app = Flask(__name__)
 sockethost = SocketIO(app, async_mode="threading")
