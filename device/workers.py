@@ -150,6 +150,31 @@ def hash_worker(args):
         # debug_print(f"exit {os.path.basename(filename)}")
         return entry
 
+def create_device_entry(fullpath, filename, dirroot, size, robot_name, local_tz):
+    metadata = getMetaData(fullpath, local_tz)
+    if metadata is None:
+        return None
+
+    formatted_date = getDateFromFilename(fullpath)
+    if formatted_date is None:
+        creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
+        formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
+    start_time = metadata.get("start_time", formatted_date)
+    end_time = metadata.get("end_time", formatted_date)
+
+    device_entry = {
+        "dirroot": dirroot,
+        "filename": filename,
+        "size": size,
+        "start_time": start_time,
+        "end_time": end_time,
+        "site": "default",
+        "robot_name": robot_name,
+        "md5": None
+    }
+    device_entry.update(metadata)
+    return device_entry
+
 
 def metadata_worker(args):
     message_queue, dirroot, filename, fullpath, robot_name, local_tz, updates = args
@@ -162,39 +187,25 @@ def metadata_worker(args):
     size = os.path.getsize(fullpath)
     metadata_filename = fullpath + ".metadata"
     if os.path.exists(metadata_filename) and (os.path.getmtime(metadata_filename) > os.path.getmtime(fullpath)):
-        device_entry = json.load(open(metadata_filename, "r"))
-        if device_entry["site"] == None:
-            device_entry["site"] = "default"
-        if "filename" not in device_entry:
-            device_entry["filename"] = filename
-            device_entry["dirroot"] = dirroot
-        device_entry["robot_name"] = robot_name
-
+        try:
+            device_entry = json.load(open(metadata_filename, "r"))
+            if device_entry["site"] == None:
+                device_entry["site"] = "default"
+            if "filename" not in device_entry:
+                device_entry["filename"] = filename
+                device_entry["dirroot"] = dirroot
+            device_entry["robot_name"] = robot_name
+        except json.decoder.JSONDecodeError:
+            device_entry = create_device_entry(fullpath, filename, dirroot, size, robot_name, local_tz)
+            if device_entry is None:
+                message_queue.put({"main_pbar": size})
+                return None
     else:
-        metadata = getMetaData(fullpath, local_tz)
-        if metadata is None:
-            # invalid file! silently ignore invalid files! 
+
+        device_entry = create_device_entry(fullpath, filename, dirroot, size, robot_name, local_tz)
+        if device_entry is None:
             message_queue.put({"main_pbar": size})
             return
-
-        formatted_date = getDateFromFilename(fullpath)
-        if formatted_date is None:
-            creation_date = datetime.fromtimestamp(os.path.getmtime(fullpath))
-            formatted_date = creation_date.strftime("%Y-%m-%d %H:%M:%S")
-        start_time = metadata.get("start_time", formatted_date)
-        end_time = metadata.get("end_time", formatted_date)
-
-        device_entry = {
-            "dirroot": dirroot,
-            "filename": filename,
-            "size": size,
-            "start_time": start_time,
-            "end_time": end_time,
-            "site": "default",
-            "robot_name": robot_name,
-            "md5": None
-        }
-        device_entry.update(metadata)
 
     if filename in updates:
         device_entry.update( updates[filename])
