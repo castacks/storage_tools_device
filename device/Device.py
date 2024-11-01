@@ -406,34 +406,32 @@ class Device:
         self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})        
 
         if len(all_files) > 0:
-
             with Manager() as manager:
                 robot_name = self.m_config.get("robot_name", None)
                 message_queue = manager.Queue()
                 updates = manager.dict(self.m_updates)
-
                 entries = []
-                pool_queue = [ (message_queue, dirroot, filename, fullpath, robot_name, self.m_local_tz, updates) for (dirroot, filename, fullpath) in all_files ]
 
+                pool_queue = [ (message_queue, dirroot, filename, fullpath, robot_name, self.m_local_tz, updates) for (dirroot, filename, fullpath) in all_files ]
                 thread = Thread(target=pbar_thread, args=(message_queue, total_size, source, socket_events, desc, max_threads))    
                 thread.start()
 
                 try:
-                    with Pool(max_threads*2) as pool:
+                    with Pool(max_threads) as pool:
                         for entry in pool.imap_unordered(metadata_worker, pool_queue):
                             if entry:
-                                entries.append(entry)
+                                entries.append(entry)                                
                 finally:
                     message_queue.put({"close": True})
 
                 self.m_files = entries
+        else:
+            debug_print("No files")
 
         self.m_metadata_thread = None
-
         self._background_hash()
 
     def _background_hash(self):
-        debug_print("enter")
         if self.m_hash_thread is not None:
             debug_print("Already doing hash creation")
             return 
@@ -477,7 +475,7 @@ class Device:
 
             try:
                 with Pool(max_threads) as pool:
-                    for entry in pool.imap_unordered(hash_worker, pool_queue):
+                    for i, entry in enumerate(pool.imap_unordered(hash_worker, pool_queue)):
                         if entry:
                             entries.append(entry)
             finally:
@@ -648,6 +646,7 @@ class Device:
 
 
     def send_device_data(self):    
+        debug_print("enter")
 
         N = 100
         blocks = [self.m_files[i:i + N] for i in range(0, len(self.m_files), N)]
@@ -964,19 +963,21 @@ class Device:
         headers = {"X-Api-Key": api_key_token }
 
         try:
-
             server, port = server_address.split(":")
             port = int(port)
             debug_print(f"Testing to {server}:{port}")
             socket.create_connection((server, port))
+            url = f"http://{server}:{port}/name"
 
-            reponse = requests.get(f"http://{server}:{port}/name", headers=headers)
-            msg = reponse.json()
+            response = requests.get(url, headers=headers)
+            if response.status_code != 200:
+                debug_print(f"Failed to fetch source name from {url} with error code {response.status_code} {response.content.decode('utf-8')}")
+                return False
+            
+            msg = response.json()
             source = msg.get("source")
 
-            debug_print("Before lock")
             with self.session_lock:
-                debug_print("After lock")
                 if source and source in self.source_to_server and self.source_to_server[source] != server_address:
                     debug_print(f"Duplication! {source}, have:{self.source_to_server[source]}, testing:{server_address}")
                     self.server_can_run[server_address] = False
