@@ -35,3 +35,5 @@ config/config.second.yaml
 device/test_utils.py
 scratch/app.py
 scratch/templates/index.html
+device/scratch_mt.py
+profile_out.prof

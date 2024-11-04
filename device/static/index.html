@@ -31,17 +31,19 @@
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" data-bs-toggle="tab" href="#about-tab"><i class="bi bi-info-circle"></i>
-                            &nbsp; About</a>                        
+                            &nbsp; About</a>
                     </li>
                 </ul>
                 <div class="bottom-item">
-                    Version <b><span id="version_number">0</span></b>
+                    Version <b><span class="version_number">0</span></b>
                 </div>
             </div>
 
             <!-- Main content -->
             <div class="col-md-10 main-content">
-                <div><h1 style="text-align: center;" id="title"></h1></div>
+                <div>
+                    <h1 style="text-align: center;" id="title"></h1>
+                </div>
 
                 <div class="tab-content">
                     <div id="connection-tab" class="tab-pane fade">
@@ -67,8 +69,9 @@
                             <div id="device-status-tqdm-header">Progress</div>
                             <div class="card" id="device-status-tqdm"></div>
                             <button type="button" class="btn btn-primary" onclick="emitFiles()"> Emit Files</button>
-                            <button type="button" class="btn btn-danger" onclick="restartConnections()">Restart Connections</button>                            
-                            <button type="button" class="btn btn-secondary" onclick="scan()">Start manual scan</button> 
+                            <button type="button" class="btn btn-danger" onclick="restartConnections()">Restart
+                                Connections</button>
+                            <button type="button" class="btn btn-secondary" onclick="scan()">Start manual scan</button>
 
                             <textarea id="status-box" rows="10" cols="100"></textarea><br>
 
@@ -80,8 +83,9 @@
                         <div class="card  device-bg">
                             <div class="card-body  device-bg">
                                 <!-- Configuration Form -->
-                                <form id="config-form"  device-bg>
-                                    <table class="table table-borderless align-middle " data-bs-table-bg="#d0eed0" style="--bs-table-bg: #d0eed0;">
+                                <form id="config-form" device-bg>
+                                    <table class="table table-borderless align-middle " data-bs-table-bg="#d0eed0"
+                                        style="--bs-table-bg: #d0eed0;">
                                         <tbody>
                                             <tr>
                                                 <td class="text-end"><label for="project_name"
@@ -102,7 +106,8 @@
                                                         placeholder="Enter robot name"></td>
                                             </tr>
                                             <tr>
-                                                <td class="text-end"><label for="API_KEY_TOKEN" class="form-label">API Key Token</label>
+                                                <td class="text-end"><label for="API_KEY_TOKEN" class="form-label">API
+                                                        Key Token</label>
                                                     <span class="question-circle" data-bs-toggle="tooltip"
                                                         title="The API_KEY_TOKEN for this robot. Your admin can provide this to you. If you are running your own upload server, it is set in the Config->Keys page.">?</span>
                                                 </td>
@@ -153,7 +158,7 @@
                                                     </select>
                                                     <!-- <input type="text" class="form-control" id="local_tz"
                                                         placeholder="Enter local time zone" required> -->
-                                                    </td>
+                                                </td>
                                             </tr>
                                             <tr>
                                                 <td class="text-end"><label for="threads"
@@ -182,7 +187,8 @@
                                                 </td>
                                             </tr>
                                             <tr>
-                                                <td class="text-end"><label for="wait_s" class="form-label">Watch Interval (seconds)</label>
+                                                <td class="text-end"><label for="wait_s" class="form-label">Watch
+                                                        Interval (seconds)</label>
                                                     <span class="question-circle" data-bs-toggle="tooltip"
                                                         title="How long to wait in seconds before attempting to connect to server again.">?</span>
                                                 </td>
@@ -191,8 +197,8 @@
                                             </tr>
 
                                             <tr>
-                                                <td class="text-end"><label for="split_size_gb"
-                                                        class="form-label">Data Split Size (GB)</label>
+                                                <td class="text-end"><label for="split_size_gb" class="form-label">Data
+                                                        Split Size (GB)</label>
                                                     <span class="question-circle" data-bs-toggle="tooltip"
                                                         title="How to split large files">?</span>
                                                 </td>
@@ -201,8 +207,8 @@
                                             </tr>
 
                                             <tr>
-                                                <td class="text-end"><label for="read_size_mb"
-                                                        class="form-label">Chunk Size (MB)</label>
+                                                <td class="text-end"><label for="read_size_mb" class="form-label">Chunk
+                                                        Size (MB)</label>
                                                     <span class="question-circle" data-bs-toggle="tooltip"
                                                         title="Chunk size for reading">?</span>
                                                 </td>
@@ -225,8 +231,32 @@
                             </div>
                         </div>
                     </div>
-                    
-                    <div id="about-tab" class="tab-pane fade">
+
+                    <div id="about-tab" class="tab-pane fade about-section">
+                        <p><strong>AirLAB Storage Tools Device</strong></p>
+                        <p>
+                            Version: <b><span class="version_number"></span></b>
+                        </p>
+                        <p>
+                            Explore the project on <a href="https://github.com/castacks/storage_tools_device"
+                                target="_blank">GitHub</a>. 
+                        </p>
+
+                        <p><strong>Built on:</strong></p>
+                        <ul class="list-unstyled">
+                            <li>
+                                <a href="https://getbootstrap.com/" target="_blank">Bootstrap v5.3.3</a> -
+                                <a href="https://github.com/twbs/bootstrap/blob/main/LICENSE" target="_blank">MIT
+                                    License</a>
+                            </li>
+                            <li>
+                                <a href="https://jquery.com/" target="_blank">jQuery v3.6.0</a> -
+                                <a href="https://jquery.com/license/" target="_blank">License</a>
+                            </li>
+                            <li>
+                                <a href="https://socket.io/" target="_blank">Socket.io v4.0.0</a> - MIT License
+                            </li>
+                        </ul>
                     </div>
 
                 </div>

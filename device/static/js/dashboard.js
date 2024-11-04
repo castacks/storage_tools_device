@@ -186,8 +186,10 @@ $(document).ready(function () {
     })
 
     socket.on("version", function(version) {
-        const span = document.getElementById("version_number")
-        span.innerText = version
+        document.querySelectorAll(".version_number").forEach( span => {
+            console.log(span)
+            span.innerText = version
+        })
     })
 
     socket.on('device_status_tqdm', function (msg) {

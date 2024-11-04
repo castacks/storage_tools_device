@@ -144,3 +144,25 @@ body {
     bottom: 10px; /* Adjust as needed */
     text-align: center; /* Center the text within the sidebar */
 }
+
+.about-section {
+    padding: 20px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    font-size: 1rem;
+    line-height: 1.5;
+}
+
+.about-section p {
+    margin-bottom: 10px;
+}
+
+.about-section a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.about-section a:hover {
+    text-decoration: underline;
+}
