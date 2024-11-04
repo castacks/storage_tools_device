@@ -141,8 +141,13 @@
                                                     <span class="question-circle" data-bs-toggle="tooltip"
                                                         title="The time zone that the logs were recorded in.">?</span>
                                                 </td>
-                                                <td><input type="text" class="form-control" id="local_tz"
-                                                        placeholder="Enter local time zone" required></td>
+                                                <td>
+                                                    <select id="local_tz" class="form-control">
+                                                        <option value="">Select a time zone</option>
+                                                    </select>
+                                                    <!-- <input type="text" class="form-control" id="local_tz"
+                                                        placeholder="Enter local time zone" required> -->
+                                                    </td>
                                             </tr>
                                             <tr>
                                                 <td class="text-end"><label for="threads"

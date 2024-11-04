@@ -1,5 +1,19 @@
 const configFields = ["watch", "servers", "include_suffix"];
 
+
+document.addEventListener("DOMContentLoaded", function() {
+    const timezoneSelect = document.getElementById("local_tz");
+    const timezones = Intl.supportedValuesOf("timeZone");  // Supported time zones
+    
+    // Populate the dropdown with time zones
+    timezones.forEach(tz => {
+        const option = document.createElement("option");
+        option.value = tz;
+        option.textContent = tz;
+        timezoneSelect.appendChild(option);
+    });
+});
+
 // Function to add list items dynamically
 function addListItem(field) {
     const newItem = document.getElementById(`new-${field}-item`).value.trim();

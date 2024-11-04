@@ -1,56 +1,98 @@
+# Device utility functions
+
+import exifread 
+import ffmpeg 
+import hashlib
+import mcap
+import mcap.exceptions
+import os
+import pathlib
+import psutil
+import pytz 
 import queue
 import re
 import socket
+import socketio
 import time
-import mcap
-import mcap.exceptions
-from mcap.reader import make_reader
-from datetime import datetime, timezone
 
-
-from rosbags.highlevel import AnyReader
-import exifread 
-import ffmpeg 
-import pathlib
-import pytz 
 from datetime import datetime, timedelta,timezone
-
-
-
-import psutil
-import hashlib
-import os
+from datetime import datetime, timezone
+from mcap.reader import make_reader
 from queue import Queue
+from rosbags.highlevel import AnyReader, AnyReaderError
+from typing import List, Tuple
 
-try:
-    from SocketIOTQDM import MultiTargetSocketIOTQDM
-    from debug_print import debug_print
-except ModuleNotFoundError:
-    from .SocketIOTQDM import MultiTargetSocketIOTQDM
-    from .debug_print import debug_print
+from device.debug_print import debug_print
+from device.SocketIOTQDM import MultiTargetSocketIOTQDM
     
 
 class PosMaker:
+    """
+    Manages positions with a maximum limit, providing the next available position and releasing positions when no longer in use.
+    """
+
     def __init__(self, max_pos) -> None:
+        """
+        Initializes the PosMaker with a maximum number of positions.
+        
+        Args:
+            max_pos (int): The maximum number of positions available initially.
+        """
         self.m_pos = {i: False for i in range(max_pos)}
         self.m_max = max_pos
-    
+
     def get_next_pos(self) -> int:
+        """
+        Retrieves the next available position. If all initial positions are in use, it extends the range by one.
+
+        Returns:
+            int: The next available position.
+        """
         for i in sorted(self.m_pos):
             if not self.m_pos[i]:
-                self.m_pos[i] = True 
+                self.m_pos[i] = True
                 return i
-            
+
         # just in case things get messed up, always return a valid position
-        i = self.m_max 
+        i = self.m_max
         self.m_max += 1
         self.m_pos[i] = True
-        return i 
-    
+        return i
+
     def release_pos(self, i):
+        """
+        Releases a position, making it available again.
+        
+        Args:
+            i (int): The position to release.
+        """
         self.m_pos[i] = False
 
-def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_threads):
+
+def pbar_thread(messages:Queue, total_size:str, source:str, socket_events:List[Tuple[socketio.Client, str, str]], desc:str, max_threads:int):
+    """Multithreaded multitarget nested websocket process bars for data transfer
+
+    This will always create a minimum of two progres bars, one for the main and at least one child.
+
+    command message are dict of [close, main_pbar, child_pbar] -> arg
+    * close. args: Argument ignored.  Close main and all child pbars. Exits the loop
+    * main_pbar. args: update_value.  Updates the main pbar by this amount.  
+    * child_pbar. args: {child_pbar: unique name, action: {[start, update, close] -> dict}}
+       * start -> {desc: descriptions of this pbar, size: size of this pbar}. Create a new child pbar.
+       * update -> {size: update the pbar by this amount}
+       * close. Closes this pbar. 
+
+    Closing the main pbar will close it and all child pbars, even if they are not completed. 
+    Closing the main pbar will also exit the function.  
+
+    Args:
+        messages (Queue): Command message queue
+        total_size (str): Total number of bytes to transfer
+        source (str): Source name
+        socket_events (List[Tuple[socketio.Client, str, str]]): List of (websocket, event, room|None)
+        desc (str): description for main pbar
+        max_threads (int): max number of expected concurrent progress bars.  
+    """
     pos_maker = PosMaker(max_threads)
 
     positions = {}
@@ -70,7 +112,6 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
             continue
         
         if "close" in action_msg:
-            # debug_print("close")
             break
 
         if "main_pbar" in action_msg:
@@ -88,11 +129,9 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
                 if position in pbars:
                     pbars[position].close()
                     del pbars[position]
-                # debug_print(f"creating {name}")
                 pbars[position] = MultiTargetSocketIOTQDM(total=size, unit="B", unit_scale=True, leave=False, position=position+1, delay=1, desc=desc, source=source,socket_events=socket_events)
                 continue
             if action == "update":     
-                # debug_print(f"updating {name}")           
                 position = positions.get(name, None)
                 if position == None:
                     debug_print(f"Do not have pbar for {name}")
@@ -101,7 +140,6 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
                     continue
                 size = action_msg["size"]
                 if position in pbars:
-                    # debug_print(f"{position} : {size}")
                     pbars[position].update(size)
                 else:
                     debug_print(f"do not have pbar for {position}")
@@ -116,19 +154,26 @@ def pbar_thread(messages:Queue, total_size, source, socket_events, desc, max_thr
                     del pbars[position]
                 pos_maker.release_pos(position)
 
-                # debug_print(f"removing {name}")
                 del positions[name]
                 continue
             continue 
 
-
+    # final cleanup. Removes all managed pbars. 
     positions = pbars.keys()
     for position in positions:
         pbars[position].close()
 
 
 
-def is_interface_up(interface):
+def is_interface_up(interface:str) -> bool:
+    """Determine if an interface is currently up
+
+    Args:
+        interface (str): name of a interface. 
+
+    Returns:
+        bool: True if interface is up, False if not
+    """
     path = f"/sys/class/net/{interface}/operstate"
     try:
         with open(path, "r") as fid:
@@ -140,7 +185,15 @@ def is_interface_up(interface):
     return state == "up"
 
 
-def get_source_by_mac_address(robot_name):
+def get_source_by_mac_address(robot_name:str) -> str:
+    """Checks if a given interface is up or down
+
+    Args:
+        interface (str): Name of an interface from psutils.net_if_address()
+
+    Returns:
+        bool: True if interface is currently up, false if not
+    """
     macs = []
     addresses = psutil.net_if_addrs()
     for interface in sorted(addresses):
@@ -151,13 +204,10 @@ def get_source_by_mac_address(robot_name):
 
         for addr in sorted(addresses[interface]):
             if addr.family == psutil.AF_LINK:  # Check if it's a MAC address
-                # if psutil.net_if_stats()[interface].isup:
                 macs.append(addr.address.replace(":",""))
 
     name = hashlib.sha256("_".join(macs).encode()).hexdigest()[:8]
     rtn = f"DEV-{robot_name}-{name}"
-
-    # rtn = "DEV-" + "_".join(macs)
     return rtn
 
 
@@ -221,6 +271,18 @@ def getDateFromFilename(full_filename:str):
 
 
 def _getMetaDataMCAP(filename: str, local_tz:str) -> dict:
+    """
+    Extracts metadata from an MCAP file, including message count by topic, 
+    start and end timestamps in the specified local timezone.
+
+    Args:
+        filename (str): Path to the MCAP file.
+        local_tz (str): Timezone to which the timestamps should be converted.
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' in the local timezone, 
+        and 'topics' with message counts per topic. Returns `None` if file reading fails.
+    """
     with open(filename, "rb") as f:
 
         try:
@@ -255,8 +317,23 @@ def _getMetaDataMCAP(filename: str, local_tz:str) -> dict:
 
 
 def _getMetadataROS(filename: str, local_tz:str) -> dict:
-    reader = AnyReader([pathlib.Path(filename)])
-    reader.open()
+    """
+    Extracts metadata from an ROS1 bag, including message count by topic, 
+    start and end timestamps in the specified local timezone.
+
+    Args:
+        filename (str): Path to the ROS1 bag.
+        local_tz (str): Timezone to which the timestamps should be converted.
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' in the local timezone, 
+        and 'topics' with message counts per topic. Returns `None` if file reading fails.
+    """  
+    try:  
+        reader = AnyReader([pathlib.Path(filename)])
+        reader.open()
+    except AnyReaderError:
+        return None 
 
     start_time_ros = reader.start_time
     end_time_ros = reader.end_time 
@@ -271,14 +348,23 @@ def _getMetadataROS(filename: str, local_tz:str) -> dict:
     return rtn 
 
 def _getMetaDataJPEG(filename: str) -> dict:
+    """Reads the timestamp from a JPEG file
 
+    * First tries to extract from filename
+    * Second tries to extract from JPEG metadata
+
+    Args:
+        filename (str): Path to JPEG file
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' the file's time zone 
+    """
     formatted_date =  getDateFromFilename(filename)
     if formatted_date:
         return {
             "start_time": formatted_date,
             "end_time": formatted_date
             }
-
 
     with open(filename, "rb") as f:
         tags = exifread.process_file(f)
@@ -292,6 +378,14 @@ def _getMetaDataJPEG(filename: str) -> dict:
     return rtn
 
 def _getMetaDataMP4(filename: str) -> dict:
+    """Extracts the metadata for an MP4 video file
+
+    Args:
+        filename (str): Name of MP4 video file
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' in the file's created timezone, 
+    """
     try:
         probe = ffmpeg.probe(filename)
         if "streams" not in probe:
@@ -300,7 +394,6 @@ def _getMetaDataMP4(filename: str) -> dict:
             return {}
         if "creation_time" not in  probe["streams"][0]["tags"]:
             return  {}
-
 
         formatted_date =  getDateFromFilename(filename)
         if formatted_date:
@@ -326,6 +419,17 @@ def _getMetaDataMP4(filename: str) -> dict:
         return None
 
 def _getMetaDataPNG(filename:str) -> dict:
+    """Reads the timestamp from a PNG file
+
+    * First tries to extract from filename
+    * Second uses the Last Modified time from the filesystem.  
+
+    Args:
+        filename (str): Path to PNG file
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' the file's time zone 
+    """
     formatted_date =  getDateFromFilename(filename)
     if formatted_date is None:
 
@@ -339,8 +443,18 @@ def _getMetaDataPNG(filename:str) -> dict:
 
 
 def _getMetaDataText(filename: str) -> dict:
-    # have to use the file time for this one
+    """Reads the timestamp from a TEXT file
 
+    * First tries to extract from filename
+    * Second uses the Last Modified time from the filesystem.  
+
+    Args:
+        filename (str): Path to TEXT file
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' the file's time zone 
+    """
+    # have to use the file time for this one
     formatted_date =  getDateFromFilename(filename)
     if formatted_date is None:
 
@@ -354,6 +468,18 @@ def _getMetaDataText(filename: str) -> dict:
 
 
 def getMetaData(filename:str, local_tz:str) -> dict:
+    """Extract the metadata from a file
+
+    Handles [mcap, bag, jpg, mp4, txt, ass, png, yaml]
+
+    Args:
+        filename (str): _description_
+        local_tz (str): _description_
+
+    Returns:
+        dict: A dictionary with 'start_time' and 'end_time' in the local timezone, 
+        and 'topics' with message counts per topic if applicable. Returns `None` if file reading fails.
+    """
     if filename.lower().endswith(".mcap"):
         return _getMetaDataMCAP(filename, local_tz)
     if filename.lower().endswith(".bag"):
@@ -373,7 +499,15 @@ def getMetaData(filename:str, local_tz:str) -> dict:
     return {}
 
 
-def get_ip_address_and_port(server_address):
+def get_ip_address_and_port(server_address:str) -> Tuple[str, str]:
+    """Get the IP address and port of a provided server:port string
+
+    Args:
+        server_address (str): A string in the form of "name:port"
+
+    Returns:
+        Tuple[str, str]: IP address, and port. 
+    """
     ip_address = None
     port = None 
     if ":" in server_address:
@@ -385,10 +519,18 @@ def get_ip_address_and_port(server_address):
         ip_address = socket.gethostbyname(name)
     except socket.gaierror as e:
         pass 
-
     return ip_address, port
 
-def same_adddress(server_address_1, server_address_2):
+def same_adddress(server_address_1:str, server_address_2:str) -> bool:
+    """Determines if two server address point to the same IP address
+
+    Args:
+        server_address_1 (str): name:port
+        server_address_2 (str): name:port
+
+    Returns:
+        bool: True if both address resolve to same IP address and the ports are the same, False otherwise
+    """
     ip_address_1, port_1 = get_ip_address_and_port(server_address_1)
     ip_address_2, port_2 = get_ip_address_and_port(server_address_2)
 
@@ -403,7 +545,16 @@ def same_adddress(server_address_1, server_address_2):
     
     return port_1 == port_2
 
-def address_in_list(query_address, server_list):
+def address_in_list(query_address:str, server_list:List[str]) -> bool:
+    """Determines if the query address is in the server list
+
+    Args:
+        query_address (str): A server address in the form of name:port
+        server_list (List[str]): A list of server address in the form of name:port
+
+    Returns:
+        bool: True if query_address is in the server_list, False otherwise. 
+    """
     ip_address_1, port_1 = get_ip_address_and_port(query_address)
     if not ip_address_1 or not port_1:
         return False 
