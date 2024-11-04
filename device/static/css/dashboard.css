@@ -137,3 +137,10 @@ body {
     box-shadow: none;
     /* No shadow to flatten the appearance */
 }
+
+
+.bottom-item {
+    position: absolute;
+    bottom: 10px; /* Adjust as needed */
+    text-align: center; /* Center the text within the sidebar */
+}

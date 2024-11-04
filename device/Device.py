@@ -27,8 +27,10 @@ from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
 from device.debug_print import debug_print
 from device.SocketIOTQDM import  MultiTargetSocketIOTQDM
 from device.utils import get_source_by_mac_address, pbar_thread, address_in_list
-import device.reindexMCAP as reindexMCAP
 from device.workers import SendWorkerArg, hash_worker, metadata_worker, reindex_worker, send_worker
+import device.reindexMCAP as reindexMCAP
+from device.__version__ import __version__
+
 
 class Device:
     def __init__(self, filename: str, local_dashboard_sio:SocketIO, salt=None) -> None:
@@ -170,13 +172,14 @@ class Device:
 
         self.update_connections()
         self.m_local_dashboard_sio.emit("title", self.m_config["source"])
+        self.m_local_dashboard_sio.emit("version", __version__ )
 
     def on_local_dashboard_disconnect(self):
         debug_print("Dashboard disconnected")
 
-    def on_refresh(self):
-        debug_print("refresh")
-        self.emitFiles()
+    def on_scan(self):
+        debug_print("Scan")
+        self._background_scan()
         return "ok", 200
 
     def on_restart_connections(self):
@@ -732,6 +735,9 @@ class Device:
 
     def index(self):
         return send_from_directory("static", "index.html")
+
+    def favicon(self):
+        return send_from_directory("static", "favicon.ico")
 
     def get_config(self):
         return jsonify(self.m_config)

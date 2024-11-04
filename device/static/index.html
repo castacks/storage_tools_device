@@ -29,7 +29,14 @@
                         <a class="nav-link" data-bs-toggle="tab" href="#connection-tab"><i class="bi bi-cloud"></i>
                             &nbsp; Connection</a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" data-bs-toggle="tab" href="#about-tab"><i class="bi bi-info-circle"></i>
+                            &nbsp; About</a>                        
+                    </li>
                 </ul>
+                <div class="bottom-item">
+                    Version <b><span id="version_number">0</span></b>
+                </div>
             </div>
 
             <!-- Main content -->
@@ -59,10 +66,9 @@
                             <p>Status</p>
                             <div id="device-status-tqdm-header">Progress</div>
                             <div class="card" id="device-status-tqdm"></div>
-                            <button type="button" class="btn btn-primary" onclick="refresh()"> Refresh</button>
-                            <button type="button" class="btn btn-secondary" onclick="emitFiles()"> Emit Files</button>
-                            <button type="button" class="btn btn-danger" onclick="restartConnections()">Restart Connections</button>
-                            <!-- <button type="button" class="btn btn-danger" onclick="debugSocket()">Debug</button>  -->
+                            <button type="button" class="btn btn-primary" onclick="emitFiles()"> Emit Files</button>
+                            <button type="button" class="btn btn-danger" onclick="restartConnections()">Restart Connections</button>                            
+                            <button type="button" class="btn btn-secondary" onclick="scan()">Start manual scan</button> 
 
                             <textarea id="status-box" rows="10" cols="100"></textarea><br>
 
@@ -220,6 +226,9 @@
                         </div>
                     </div>
                     
+                    <div id="about-tab" class="tab-pane fade">
+                    </div>
+
                 </div>
             </div>
         </div>

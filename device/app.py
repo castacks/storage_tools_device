@@ -20,12 +20,13 @@ def create_app(config_file, salt):
 
     # Define all routes and socket events
     app.route("/")(device.index)
+    app.route("/favicon.ico")(device.favicon)
     app.route("/get_config", methods=["GET"])(device.get_config)
     app.route("/save_config", methods=["POST"])(device.save_config)
     app.route("/debug", methods=["GET"])(device.debug_socket)
-    app.route("/refresh", methods=["GET"])(device.on_refresh)
     app.route("/restartConnections", methods=["GET"])(device.on_restart_connections)
     app.route("/emitFiles", methods=["GET"])(device.emitFiles)
+    app.route("/scan", methods=["GET"])(device.on_scan)
 
     sockethost.on("connect")(device.on_local_dashboard_connect)
     sockethost.on("disconnect")(device.on_local_dashboard_disconnect)

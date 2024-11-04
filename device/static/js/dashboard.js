@@ -185,6 +185,11 @@ $(document).ready(function () {
         document.title = "Dev Config " + title 
     })
 
+    socket.on("version", function(version) {
+        const span = document.getElementById("version_number")
+        span.innerText = version
+    })
+
     socket.on('device_status_tqdm', function (msg) {
         //console.log(msg)
         updateProgress(msg, 'device-status-tqdm');
@@ -273,6 +278,11 @@ function restartConnections() {
 function emitFiles()
 {
     fetch("emitFiles")
+}
+
+function scan()
+{
+    fetch("scan")
 }
 
 window.serverStatus = {}
