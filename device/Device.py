@@ -20,7 +20,7 @@ from flask import request
 from flask_socketio import SocketIO
 from threading import Lock
 from threading import Thread
-from typing import cast
+from typing import List, cast
 from zeroconf import ServiceBrowser, ServiceStateChange
 from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
 
@@ -177,6 +177,11 @@ class Device:
     def on_local_dashboard_disconnect(self):
         debug_print("Dashboard disconnected")
 
+    def _on_disconnect(self):
+        debug_print(f"Got disconnected")
+        self.m_local_dashboard_sio.emit("server_disconnect")
+
+    ## Server connection callbacks
     def on_scan(self):
         debug_print("Scan")
         self._background_scan()
@@ -196,12 +201,7 @@ class Device:
         self.start_zero_config_servers()
         return "ok", 200
 
-    def _on_disconnect(self):
-        debug_print(f"Got disconnected")
-        self.m_local_dashboard_sio.emit("server_disconnect")
-
-    ## Server connection callbacks
-    def _on_device_candel_transfer(self, data:dict, server_address:str):
+    def _on_device_cancel_transfer(self, data:dict, server_address:str):
         """Cancel the transfer for server_address
 
         Args:
@@ -623,6 +623,10 @@ class Device:
         pass 
 
     def _update_fs_info(self):
+        """Update the fs_info (filesystem info) for each watch directory
+
+        Clears and updates self.m_fs_info.  
+        """
         self.m_fs_info = {}
 
         for dirroot in self.m_config["watch"]:
@@ -634,25 +638,60 @@ class Device:
                     self.m_fs_info[dev] = (dirroot, f"{free_percentage:0.2f}")
 
 
-    def _on_device_scan(self, data):
+    def _on_device_scan(self, data:dict):
+        """Callback to run a background scan. 
+
+        Checks the source to verify that this is the target
+
+        Args:
+            data (dict): {source: str()}
+        """
         source = data.get("source")
         if source != self.m_config["source"]:
             return
-
         self._background_scan()
 
-    def _on_device_send(self, data, server):
+    def _on_device_send(self, data:dict, server:str):
+        """Callback to send a set of files to a selected server
+
+        The file list is a list of tuples
+        * dirroot: Path up to relative path, usually the Watch directory
+        * relative_path: path to file inside the Watch directory
+        * upload_id: Upload id created by server
+        * offset_b: offset in bytes. 0 if new file, otherwise length of server's partial for this file
+        * file_size: Total file size in bytes for this file
+
+        Args:
+            data (dict): {"source": str(), "files": filelist}
+            server (str): name:port
+        """
         source = data.get("source")
         if source != self.m_config["source"]:
             return
         files = data.get("files")
         self.m_local_dashboard_sio.start_background_task(self._background_send_files, server, files)
 
-    def _on_duplicate(self):
-        
-        pass 
+    def isConnected(self, server: str) -> bool:
+        """Check if there is a connection to the named server
 
-    def on_device_remove(self, data):
+        Args:
+            server (str): A server name, name:port
+
+        Returns:
+            bool: True if the connection is active, False if not
+        """
+        connected = server in self.server_sio and self.server_can_run[server] and self.server_sio[server].connected        
+        return connected
+
+
+    def on_device_remove(self, data:dict):
+        """Delete a set of files from the server.
+
+        filelist: List[ Tuple[dirroot, filename, upload_id ]]
+          
+        Args:
+            data (dict): {source: str(), files: filelist}
+        """
         # debug_print(data)
         source = data.get("source")
         if source != self.m_config["source"]:
@@ -661,14 +700,26 @@ class Device:
 
         self._removeFiles(files)
 
-    def isConnected(self, server):
-        connected = server in self.server_sio and self.server_can_run[server] and self.server_sio[server].connected        
-        return connected
 
     def _removeFiles(self, files:list):
+        """Remove the files in the file list
+
+        Args:
+            files (list): List[ Tuple[dirroot, filename, upload_id ]]
+        """
         debug_print("Enter")
         for item in files:
             dirroot, file, upload_id = item
+
+            valid_dirroot = False
+            for watch in self.m_config["watch"]:
+                if watch in dirroot:
+                    valid_dirroot = True 
+            if not valid_dirroot:
+                # something is wrong!  This isn't in the watch directory
+                # skipping this file so we don't accidently delete something important!
+                debug_print(f"Not deleting {item}, it is not in my watch list")
+                continue
             fullpath = os.path.join(dirroot, file)
 
             if os.path.exists(fullpath):
@@ -687,7 +738,25 @@ class Device:
         self._background_scan()
 
 
-    def send_device_data(self):    
+    def send_device_data(self): 
+        """Send the device data to a server, in nice bitesize chunks
+
+        Sends two types of messages. A single "device_data", and as many "device_data_block" as needed
+
+        device_data 
+          "source": source name
+          "project": project name 
+          "robot_name": robot name 
+          "total": total number of device_data_block to expect
+          "fs_info": dict of dev -> (dirroot, %free)
+
+        device_data_block
+           "source": source name 
+           "room": source name
+           "total": total number of device_data_block to expect
+           "block": list of entries
+           "id": block id
+        """
         debug_print("enter")
 
         N = 100
@@ -743,7 +812,6 @@ class Device:
         return jsonify(self.m_config)
 
     def save_config(self):
-        changed = False
         rescan = False
         reconnect = False
  
@@ -752,7 +820,6 @@ class Device:
             for key in config:
                 if key in self.m_config:
                     if self.m_config[key] != config[key]:
-                        changed = True
                         if key == "watch":
                             rescan = True
                         if key == "robot_name":
@@ -813,7 +880,6 @@ class Device:
         # Initialize the "can run" flag and spawn a thread for the server
         self.server_can_run[server_address] = True
         self.server_should_run[server_address] = True
-        # thread = eventlet.spawn(self.manage_connection, server_address)
         thread = Thread(target=self.manage_connection, args=(server_address,from_src))
         thread.start()
         self.server_threads[server_address] = thread
@@ -824,9 +890,7 @@ class Device:
         if server_address in self.server_can_run:
             self.server_can_run[server_address] = False
             if server_address in self.server_threads:
-                thread = self.server_threads.pop(server_address, None)
-            # if thread:
-            #     thread.kill()  # Kill the thread if necessary
+                self.server_threads.pop(server_address, None)
 
         sio = None
         with self.session_lock:
@@ -846,9 +910,9 @@ class Device:
 
         self.m_local_dashboard_sio.emit("server_remove",  {"name": server_address})
 
-
-
     def stop_zero_config_servers(self):
+        """Stop all the active servers that are managed by zeroconf. 
+        """
         debug_print("enter")
         for server_address in self.m_config.get("zero_conf", []):
             debug_print("before")
@@ -856,6 +920,13 @@ class Device:
             debug_print("after")
 
     def disconnect_all(self):
+        """Disconnect all active connections
+
+        * Call stop_server_thread for each key in self.server_threads
+        * call stop_zero_config_servers()
+        * clears source_to_server
+        * clears server_to_source 
+        """
         debug_print("enter")
         servers = sorted(self.server_threads)
         for server_address in servers:
@@ -866,11 +937,18 @@ class Device:
         debug_print("exit")
 
     def update_connections_thread(self):
+        """Every 5 seconds, update the current connection status.  
+        """
         while True:
             self.update_connections()
             time.sleep(5)
 
     def update_connections(self):
+        """Check each connection and send an update on "server_connections"
+
+        Check each active connection, and create a "connections" message
+        A connections message maps the server_address to (state:bool, name of source)
+        """
         connections = {}
         for server_address in self.server_can_run:
             if  not self.server_can_run[server_address]:
@@ -881,7 +959,20 @@ class Device:
 
         self.m_local_dashboard_sio.emit("server_connections", connections)
 
-    def manage_zero_conf_connection(self, server_list):
+    def manage_zero_conf_connection(self, server_list:List[str]):
+        """Manage connections to a list of zeroconf provided servers
+
+        For each server name in the list
+          Check to see if that server can be run. If not, sleep for "wait_s" and try something else.
+          Test the connections, and check for duplications
+
+          
+        NOTE: This will only connect to a single zeroconf server at a time! 
+            
+        Args:
+            server_list (List[str]): list of servers provided by zeroconf
+        """
+
         can_run = True 
         while can_run:
             for server_address in server_list:
@@ -903,8 +994,14 @@ class Device:
             time.sleep(self.m_config["wait_s"])
 
 
-    def manage_connection(self, server_address, from_src):
-        debug_print(f"Testing to {server_address}")
+    def manage_connection(self, server_address:str, from_src:str):
+        """Manage a single server connection
+
+        Args:
+            server_address (str): A server address  
+            from_src (str): (debug) name of the function that called this.  
+        """
+        debug_print(f"Testing connection to {server_address}")
 
         while self.server_can_run.get(server_address, False):
             try:
@@ -912,7 +1009,6 @@ class Device:
                     self.test_connection(server_address, from_src)
             except Exception as e:
                 debug_print(f"Error with server {server_address}: {e}")
-                # eventlet.sleep(self.m_config["wait_s"])  
             finally:
                 time.sleep(self.m_config["wait_s"])
 
@@ -933,7 +1029,22 @@ class Device:
         )
         return sio 
 
-    def test_connection(self, server_address, from_src):
+    def test_connection(self, server_address:str, from_src:str):
+        """Create a connection to a single server
+
+        * Test the socket to server_address, break out if can't connect
+        * Get the source name of the server
+        * Break out if already connected to that source. 
+        * Wait for connection to terminate
+        * Return 
+
+        Args:
+            server_address (str): Server name
+            from_src (str): Calling function
+
+        Returns:
+            bool: False if duplication connection, or failed to fetch source name, True otherwise
+        """
         debug_print(f"Testing {server_address} from {from_src}")
 
         sio = self._create_client()
@@ -994,7 +1105,7 @@ class Device:
         
         @sio.event
         def device_cancel_transfer(data):
-            self._on_device_candel_transfer(data, server_address)
+            self._on_device_cancel_transfer(data, server_address)
 
         @sio.event
         def update_entry(data):
@@ -1066,25 +1177,3 @@ class Device:
 
         return True
 
-    def debug_socket(self):
-        debug_print("start\n\nstart")
-        thread = Thread(target=self._debug_socket)
-        thread.start()
-        debug_print("complete\n\ncomplete")
-        return "ok", 200
-
-    def _debug_socket(self):
-
-        event = "device_status_tqdm"
-        socket_events = [ (self.m_sio, event, None), (self.m_local_dashboard_sio, event, None)]
-
-        total_size = 15
-        with MultiTargetSocketIOTQDM(total=total_size, desc="Debug socket", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
-            for i in range(total_size):
-                main_pbar.update()
-                self.m_local_dashboard_sio.emit("ping", "msg")
-                #eventlet.sleep(1)
-                time.sleep(1)
-
-
-        pass 

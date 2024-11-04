@@ -31,7 +31,15 @@ def get_mcap_binary() -> str:
         raise FileNotFoundError(msg)
 
 
-def test_mcap_file(filename) -> bool:
+def test_mcap_file(filename:str) -> bool:
+    """Wrapper function to test if an mcap file can be opened. 
+
+    Args:
+        filename (str): mcap filename
+
+    Returns:
+        bool: True if the file can be opened, False if not
+    """
     with open(filename, "rb") as f:
         try:
             reader = make_reader(f)
