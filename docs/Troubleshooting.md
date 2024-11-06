@@ -54,3 +54,21 @@ Verify that the Device and the Server are on the same network.  Some routers can
 Verify that the artifacts files are being created. The Device user might not have write permission in the data directory.
 
 The Storage Tools Device creates additional files to speed up processing.  These will always in the form of `{original_file_name}.md5` and `{original_file_name}.metadata`. These files will only be created in the `watch` directories as defined by the config yaml file.  These files can be safely removed. They will be regenerated when the system scans again.
+
+### The console is reporting "write() before start_response"
+
+If you see this error message on the console:
+
+```python
+Error on request:
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/werkzeug/serving.py", line 370, in run_wsgi
+    execute(self.server.app)
+  File "/usr/local/lib/python3.12/site-packages/werkzeug/serving.py", line 336, in execute
+    write(b"")
+  File "/usr/local/lib/python3.12/site-packages/werkzeug/serving.py", line 261, in write
+    assert status_set is not None, "write() before start_response"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+You can safely ignore it. This message is caused by a user reloading the dashboard.
