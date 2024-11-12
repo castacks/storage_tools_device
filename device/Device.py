@@ -365,7 +365,7 @@ class Device:
                         if os.path.exists(filename) and os.path.getsize(filename) > 0:
                             all_files.append(filename)
                             
-        debug_print("Scan complete")
+        debug_print(f"Scan complete, with {len(all_files)}")
         self._emit_to_all_servers("device_status", {"source": self.m_config["source"], "room": self.m_config["source"]})        
 
         with MultiTargetSocketIOTQDM(total=len(all_files), desc="Scanning files", position=0, leave=False, source=self.m_config["source"], socket_events=socket_events) as main_pbar:
